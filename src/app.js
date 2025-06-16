@@ -1,5 +1,5 @@
 const express = require('express');
-const cors = require('cors'); // <-- Add this
+const cors = require('cors'); 
 const pdfRouter = require('./routes/pdf');
 
 const app = express();
