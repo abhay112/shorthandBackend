@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PDF Document</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+    }
+    .header {
+      color: #1976d2;
+      margin-bottom: 20px;
+    }
+    .content {
+      font-size: 18px;
+      flex: 1 0 auto;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 30px;
+      margin-bottom: 20px;
+      color: #888;
+      font-size: 15px;
+      opacity: 0.7;
+      letter-spacing: 1px;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="content">
+    {{{html}}}
+  </div>
+  <div class="footer">
+    &copy; {{year}} Shorthand Typing Test Checker &middot; BY Vikalp Singh
+  </div>
+</body>
+</html>
