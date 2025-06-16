@@ -17,6 +17,9 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   next();
 });
+app.get('/', (req, res) => {
+  res.send('Shorthand Typing Test API is running!');
+});
 
 app.use('/api/pdf', pdfRouter);
 
