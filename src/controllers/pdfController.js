@@ -6,22 +6,18 @@ const handlebars = require('handlebars');
 const downloadsDir = path.join(__dirname, '..', 'downloads');
 const templatePath = path.join(__dirname, '..', 'views', 'template.html');
 
-// Create downloads directory if it doesn't exist
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir);
 }
 
-// Helper function to get next filename
 function getNextFilename() {
   const files = fs.readdirSync(downloadsDir)
-                  .filter(file => file.startsWith('p') && file.endsWith('.pdf'));
-
+    .filter(file => file.startsWith('p') && file.endsWith('.pdf'));
   const nums = files.map(file => parseInt(file.slice(1, -4))).filter(num => !isNaN(num));
   const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
   return `p${nextNum}.pdf`;
 }
 
-// Load and compile handlebars template
 function compileTemplate(data) {
   const templateContent = fs.readFileSync(templatePath, 'utf-8');
   const template = handlebars.compile(templateContent);
@@ -37,11 +33,11 @@ exports.generatePdf = async (req, res) => {
 
   let browser;
   try {
-    browser = await puppeteer.launch({ 
+    browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
-    
+
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
     await page.emulateMediaType('screen');
@@ -52,18 +48,13 @@ exports.generatePdf = async (req, res) => {
       margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' }
     });
 
-    // Send PDF directly as response
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': 'attachment; filename="typing-result.pdf"'
-    });
-    res.send(pdfBuffer);
+    const filename = getNextFilename();
+    const filePath = path.join(downloadsDir, filename);
+    fs.writeFileSync(filePath, pdfBuffer);
 
+    res.json({ message: 'PDF generated successfully', filename });
   } catch (err) {
-    res.status(500).json({ 
-      error: 'PDF generation failed', 
-      details: err.message 
-    });
+    res.status(500).json({ error: 'PDF generation failed', details: err.message });
   } finally {
     if (browser) await browser.close();
   }
