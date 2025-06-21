@@ -1,15 +1,18 @@
-const express = require('express');
-const cors = require('cors'); 
-const pdfRouter = require('./routes/pdf');
+// server.js or server.ts
+import express from 'express';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import pdfRouter from './routes/pdf.js'; 
+import commonRoutes from './routes/index.js';
+import dotenv from 'dotenv';
+dotenv.config(); 
+
+import { dbConnection, PORT } from './config/index.js'; 
+console.log(process.env.MONGO_URI); 
 
 const app = express();
 
-// Enable CORS for all origins (development)
 app.use(cors());
-
-// If you want to restrict to a specific origin:
-// app.use(cors({ origin: 'http://localhost:3001' })); // Replace with your frontend URL
-
 app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
@@ -17,13 +20,25 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   next();
 });
+
 app.get('/', (req, res) => {
   res.send('Shorthand Typing Test API is running!');
 });
 
 app.use('/api/pdf', pdfRouter);
+app.use('/api/v1', commonRoutes);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+console.log(dbConnection.url)
+
+mongoose
+  .connect(dbConnection.url, dbConnection.options)
+  .then(() => {
+    console.log('✅ MongoDB connected');
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection error:', err);
+  });
+

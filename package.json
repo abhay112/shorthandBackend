@@ -2,19 +2,25 @@
   "name": "backend",
   "version": "1.0.0",
   "main": "app.js",
+  "tyoe": "module",
   "scripts": {
     "start": "NODE_ENV=production node src/app.js",
     "dev": "NODE_ENV=development nodemon src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "seed": "node src/faker/seed.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@faker-js/faker": "^9.8.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "handlebars": "^4.7.8",
+    "mongoose": "^8.16.0",
+    "multer": "^2.0.1",
     "puppeteer": "^24.10.1",
     "puppeteer-core": "^24.10.1"
   },
