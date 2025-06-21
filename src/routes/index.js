@@ -4,9 +4,12 @@ import studentRoutes from './studentRoutes.js';
 import testRoutes from './testRoutes.js';
 import shiftRoutes from './shiftRoutes.js';
 import resultRoutes from './resultRoutes.js';
+import pdfRouter from './pdf.js'; 
+
 
 const router = express.Router();
 
+router.use('/pdf', pdfRouter);
 router.use('/admin', adminRoutes);
 router.use('/student', studentRoutes);
 router.use('/test', testRoutes);

@@ -2,7 +2,6 @@
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
-import pdfRouter from './routes/pdf.js'; 
 import commonRoutes from './routes/index.js';
 import dotenv from 'dotenv';
 dotenv.config(); 
@@ -25,7 +24,6 @@ app.get('/', (req, res) => {
   res.send('Shorthand Typing Test API is running!');
 });
 
-app.use('/api/pdf', pdfRouter);
 app.use('/api/v1', commonRoutes);
 
 console.log(dbConnection.url)
