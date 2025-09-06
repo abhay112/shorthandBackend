@@ -1,18 +1,56 @@
 import testService from '../services/testService.js';
 
-// Upload audio only
-export const uploadAudio = async (req, res) => {
-  const audioURL = req.file.path;
-  const { title } = req.body;
 
-  const test = await testService.createTestWithAudio(title, audioURL, req.adminId);
-  res.json(test);
+export const uploadTest = async (req, res) => {
+  try {
+    const { title, referenceText, id } = req.body;
+    const audioURL = req.file?.path || null;
+
+    if (!title || !referenceText) {
+      return res.status(400).json({ message: 'Title and referenceText are required' });
+    }
+
+    let test;
+
+    if (id) {
+      // Update case
+      const updatePayload = { referenceText };
+      if (audioURL) updatePayload.audioURL = audioURL;
+      test = await testService.updateTest(id, updatePayload);
+      if (!test) return res.status(404).json({ message: 'Test not found' });
+    } else {
+      // Create case
+      test = await testService.createTest(title, audioURL, referenceText, req.adminId);
+    }
+
+    res.status(200).json(test);
+  } catch (error) {
+    console.error('Upload Test Error:', error);
+    res.status(500).json({ message: 'Failed to save test' });
+  }
 };
 
-// Upload reference text (attach to existing test)
-export const uploadText = async (req, res) => {
-  const { testId, referenceText } = req.body;
+// Get all tests
+export const getAllTests = async (req, res) => {
+  try {
+    const tests = await testService.getAllTests();
+    res.json(tests);
+  } catch (error) {
+    console.error('Error fetching tests:', error);
+    res.status(500).json({ message: 'Failed to fetch tests' });
+  }
+};
 
-  const updatedTest = await testService.attachTextToTest(testId, referenceText);
-  res.json(updatedTest);
+export const deleteTest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await testService.deleteTest(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Test not found' });
+    }
+    res.json({ message: 'Test deleted successfully' });
+  } catch (error) {
+    console.error('Delete Test Error:', error);
+    res.status(500).json({ message: 'Failed to delete test' });
+  }
 };

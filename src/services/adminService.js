@@ -5,11 +5,15 @@ const adminService = {
     return await Student.find().populate('assignedShifts');
   },
 
-  approveStudentService: async (email) => {
+  getStudentById: async (id) => {
+    return await Student.findById(id).populate('assignedShifts');
+  },
+
+  approveStudentService: async (email, status) => {
     return await Student.findOneAndUpdate(
       { email },
-      { isApproved: true },
-      { new: true }
+      { isApproved: status },
+      { new: true } // 
     );
   },
 

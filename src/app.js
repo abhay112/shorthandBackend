@@ -1,13 +1,12 @@
 // server.js or server.ts
 import express from 'express';
 import cors from 'cors';
-import mongoose from 'mongoose';
+// import mongoose from 'mongoose';
 import commonRoutes from './routes/index.js';
 import dotenv from 'dotenv';
 dotenv.config(); 
 
-import { dbConnection, PORT } from './config/index.js'; 
-console.log(process.env.MONGO_URI); 
+// import { dbConnection, PORT } from './config/index.js'; 
 
 const app = express();
 
@@ -26,17 +25,24 @@ app.get('/', (req, res) => {
 
 app.use('/api/v1', commonRoutes);
 
-console.log(dbConnection.url)
+app.listen(3000, () => {
+  console.log(`🚀 Server running in  mode on port 3000 `);
+});
 
-mongoose
-  .connect(dbConnection.url, dbConnection.options)
-  .then(() => {
-    console.log('✅ MongoDB connected');
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-    });
-  })
-  .catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-  });
+
+
+
+// console.log(dbConnection.url)
+
+// mongoose
+//   .connect(dbConnection.url, dbConnection.options)
+//   .then(() => {
+//     console.log('✅ MongoDB connected');
+//     app.listen(PORT, () => {
+//       console.log(`🚀 Server running on port ${PORT}`);
+//     });
+//   })
+//   .catch(err => {
+//     console.error('❌ MongoDB connection error:', err);
+//   });
 

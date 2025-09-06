@@ -1,7 +1,13 @@
-const puppeteer = require('puppeteer');
-const fs = require('fs');
-const path = require('path');
-const handlebars = require('handlebars');
+// controllers/pdfController.js
+import puppeteer from 'puppeteer';
+import fs from 'fs';
+import path from 'path';
+import handlebars from 'handlebars';
+import { fileURLToPath } from 'url';
+
+// ✅ Fix __dirname (not available in ES modules)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const templatePath = path.join(__dirname, '..', 'views', 'template.html');
 
@@ -11,7 +17,7 @@ function compileTemplate(data) {
   return template(data);
 }
 
-exports.generatePdf = async (req, res) => {
+const generatePdf = async (req, res) => {
   const { html } = req.body;
 
   if (!html) {
@@ -21,7 +27,7 @@ exports.generatePdf = async (req, res) => {
   let browser;
   try {
     browser = await puppeteer.launch({
-      executablePath: '/usr/bin/google-chrome-stable',  // <=== key change
+      executablePath: '/usr/bin/google-chrome-stable', // adjust if needed
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       headless: true,
     });
@@ -39,12 +45,16 @@ exports.generatePdf = async (req, res) => {
 
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': 'attachment; filename="document.pdf"'
+      'Content-Disposition': 'attachment; filename="document.pdf"',
     });
     res.send(pdfBuffer);
   } catch (err) {
-    res.status(500).json({ error: 'PDF generation failed', details: err.message });
+    res
+      .status(500)
+      .json({ error: 'PDF generation failed', details: err.message });
   } finally {
     if (browser) await browser.close();
   }
 };
+
+export default { generatePdf };

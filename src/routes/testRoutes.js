@@ -1,14 +1,15 @@
 import express from 'express';
 import multer from 'multer';
 import {
-  uploadAudio,
-  uploadText
+  deleteTest,
+  getAllTests,
+  uploadTest
 } from '../controllers/testController.js';
 
 const upload = multer({ dest: 'uploads/audios/' });
 const router = express.Router();
 
-router.post('/audio', upload.single('audio'), uploadAudio);
-router.post('/text', uploadText);
-
+router.get('/', getAllTests);
+router.post('/uploadTest', upload.single('audio'), uploadTest);
+router.delete('/:id', deleteTest);
 export default router;
