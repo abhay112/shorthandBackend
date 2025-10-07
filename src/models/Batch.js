@@ -5,7 +5,8 @@ const batchSchema = new mongoose.Schema({
     type: String, 
     required: true, 
     unique: true,
-    trim: true 
+    trim: true,
+    index: true
   },
   description: { 
     type: String, 
@@ -55,7 +56,6 @@ batchSchema.pre('save', function(next) {
 });
 
 // Index for better query performance
-batchSchema.index({ name: 1 });
 batchSchema.index({ createdBy: 1 });
 batchSchema.index({ isActive: 1 });
 

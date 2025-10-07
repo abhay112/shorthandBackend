@@ -18,8 +18,8 @@ router.use('/auth', authRoutes);
 // Protected routes
 router.use('/admin', adminRoutes);
 router.use('/admin/students', adminStudentRoutes);
-router.use('/student', studentRoutes);
-router.use('/student', studentBatchRoutes);
+router.use('/students', studentRoutes);
+router.use('/students', studentBatchRoutes);
 router.use('/test', testRoutes);
 router.use('/batches', batchRoutes);
 router.use('/result', resultRoutes);

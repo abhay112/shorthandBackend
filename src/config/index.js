@@ -19,8 +19,9 @@ export const {
 export const dbConnection = {
   url: process.env.MONGO_URI || `mongodb://${DB_HOST}:${DB_PORT}/${DB_DATABASE}`,
   options: {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
     connectTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 5000,
+    maxPoolSize: 10,
+    minPoolSize: 5,
   },
 };
