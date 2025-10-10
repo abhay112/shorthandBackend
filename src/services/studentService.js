@@ -212,53 +212,168 @@ const studentService = {
       const batchIdStrings = Array.from(new Set(student.assignedBatches.map(b => String(b._id))));
       const batchIds = student.assignedBatches.map(batch => batch._id);
 
+      // Get today's UTC date range
+      const { start: startUtc, end: endUtc } = studentService.getUtcDayRange();
 
-      const testIdFromBatch = await Batch.findOne({
-        _id: { $in: batchIds },
-      }).lean();
-
-      console.log('testIdFromBatch', testIdFromBatch);
-
-      const tests = await Test.find({ 'assignedDays.batchId': { $in: batchIds } })
-        .populate('assignedDays.batchId', 'name') // populate the batch reference
+      // Find tests assigned to the student's batches for today
+      // Priority: Day-specific assignments > General batch assignments
+      const testsFromAssignedDays = await Test.find({
+        'assignedDays': {
+          $elemMatch: {
+            batchId: { $in: batchIds },
+            assignedDate: {
+              $gte: startUtc,
+              $lt: endUtc
+            },
+            isActive: true
+          }
+        },
+        isActive: true,
+        isPublished: true
+      })
+        .populate('assignedDays.batchId', 'name')
         .lean();
-      console.log(batchIds, 'batchIds');
-      const tes = await Test.find({ _id: { $in: batchIds } }).lean();
-      console.log('tests matching batchIds', tes);
+      
+      const testsFromAssignedBatches = await Test.find({ 
+        assignedBatches: { $in: batchIds },
+        isActive: true,
+        isPublished: true,
+        // Only include if no specific day assignments exist
+        'assignedDays.0': { $exists: false }
+      })
+        .populate('assignedBatches', 'name')
+        .lean();
 
-      if (!tests || tests.length === 0) {
-        logger.info('no test found for today', { studentId, batchIds, startUtc, endUtc });
-        const maybe = await Test.find({ 'assignedDays.batchId': { $in: batchIds } }).limit(5).lean();
-        logger.debug('sample tests matching batchIds (no date filter)', { maybe });
+      // Combine and prioritize day-specific tests
+      const allAvailableTests = [...testsFromAssignedDays, ...testsFromAssignedBatches];
+
+      logger.debug('tests found for student today', { 
+        studentId, 
+        batchIds, 
+        assignedDaysTests: testsFromAssignedDays.length,
+        assignedBatchesTests: testsFromAssignedBatches.length,
+        totalTests: allAvailableTests.length,
+        startUtc,
+        endUtc
+      });
+
+      if (!allAvailableTests || allAvailableTests.length === 0) {
+        logger.info('no test found for student today', { studentId, batchIds, startUtc, endUtc });
         return null;
       }
 
-      // find the matched assignedDays element (should exist because of $elemMatch)
-      const matchedDay = (test.assignedDays || []).find(ad => {
-        const bid = ad.batchId && (ad.batchId._id || ad.batchId);
-        const matchBatch = batchIdStrings.includes(String(bid));
-        const d = new Date(ad.date);
-        // return matchBatch && d >= startUtc && d < endUtc;
-        return matchBatch;
-
+      // Sort tests by priority (day-specific tests first, then by priority, then by creation date)
+      const sortedTests = allAvailableTests.sort((a, b) => {
+        // Day-specific tests have higher priority
+        const aHasDayAssignment = a.assignedDays && a.assignedDays.length > 0;
+        const bHasDayAssignment = b.assignedDays && b.assignedDays.length > 0;
+        
+        if (aHasDayAssignment && !bHasDayAssignment) return -1;
+        if (!aHasDayAssignment && bHasDayAssignment) return 1;
+        
+        // If both have day assignments, sort by priority
+        if (aHasDayAssignment && bHasDayAssignment) {
+          const aPriority = Math.max(...a.assignedDays.map(ad => ad.priority || 1));
+          const bPriority = Math.max(...b.assignedDays.map(ad => ad.priority || 1));
+          if (aPriority !== bPriority) return bPriority - aPriority;
+        }
+        
+        // Finally sort by creation date (newest first)
+        return new Date(b.createdAt) - new Date(a.createdAt);
       });
 
-      const canTakeTest = await studentService.canStudentTakeTest(studentId, test._id);
+      // Return all available tests for today (multiple tests per day support)
+      const testsWithMetadata = [];
 
+      for (const test of sortedTests) {
+        // Find the specific day assignment for this test
+        let matchedDay = null;
+        let assignedBatch = null;
+
+        if (test.assignedDays && test.assignedDays.length > 0) {
+          matchedDay = test.assignedDays.find(ad => {
+            const bid = ad.batchId && (ad.batchId._id || ad.batchId);
+            const matchBatch = batchIdStrings.includes(String(bid));
+            const d = new Date(ad.assignedDate);
+            return matchBatch && d >= startUtc && d < endUtc && ad.isActive;
+          });
+          assignedBatch = matchedDay?.batchId;
+        } else if (test.assignedBatches && test.assignedBatches.length > 0) {
+          // General assignment
+          assignedBatch = test.assignedBatches.find(batch => 
+            batchIdStrings.includes(String(batch._id || batch))
+          );
+        }
+
+        // Check if student can take this test (considering blocking)
+        const accessCheck = await studentService.canStudentTakeTest(studentId, test._id);
+        
+        // Get completion info for this test
+        const existingAttempts = await Result.find({ 
+          studentId, 
+          testId: test._id,
+          status: 'completed'
+        }).sort({ submittedAt: -1 }).lean();
+
+        const attemptCount = existingAttempts.length;
+        const hasCompleted = attemptCount > 0;
+        const lastAttempt = hasCompleted ? existingAttempts[0] : null;
+        
+        // Check if completed today
+        const { start: todayStart, end: todayEnd } = studentService.getUtcDayRange();
+        const completedToday = hasCompleted && lastAttempt && 
+          new Date(lastAttempt.submittedAt) >= todayStart && 
+          new Date(lastAttempt.submittedAt) < todayEnd;
+        
+        // Check if test content can be viewed (even if blocked)
+        const canViewContent = !test.isBlocked || test.allowViewWhenBlocked;
+
+        testsWithMetadata.push({
+          test: {
+            id: test._id,
+            title: test.title,
+            description: test.description,
+            testType: test.testType,
+            difficulty: test.difficulty,
+            category: test.category,
+            duration: test.duration,
+            maxRetakes: test.maxRetakes,
+            settings: test.settings,
+            isBlocked: test.isBlocked,
+            blockReason: test.blockReason,
+            status: test.isBlocked ? 'blocked' : 'available'
+          },
+          canTakeTest: accessCheck.canTake && !test.isBlocked,
+          canViewContent,
+          assignedBatch,
+          priority: matchedDay?.priority || 1,
+          isBlocked: test.isBlocked,
+          blockReason: test.blockReason,
+          // Attempt information
+          attemptInfo: {
+            totalAttempts: attemptCount,
+            maxRetakes: test.maxRetakes,
+            remainingAttempts: accessCheck.remainingAttempts || 0,
+            hasCompleted: hasCompleted,
+            completedToday: completedToday,
+            lastAttemptDate: lastAttempt ? lastAttempt.submittedAt : null,
+            lastAttemptScore: lastAttempt ? {
+              wpm: lastAttempt.wpm,
+              accuracy: lastAttempt.accuracy,
+              rank: lastAttempt.rank,
+              percentile: lastAttempt.percentile
+            } : null
+          }
+        });
+      }
+
+      // Return the highest priority test as primary, but include all tests for the day
       return {
-        test: {
-          id: test._id,
-          title: test.title,
-          description: test.description,
-          difficulty: test.difficulty,
-          category: test.category,
-          duration: test.duration,
-          maxRetakes: test.maxRetakes,
-          settings: test.settings
-        },
-        canTakeTest,
-        assignedBatch: matchedDay ? (matchedDay.batchId && matchedDay.batchId.name ? matchedDay.batchId : matchedDay.batchId) : null
+        primaryTest: testsWithMetadata[0] || null,
+        allTestsForToday: testsWithMetadata,
+        totalTestsAvailable: testsWithMetadata.length
       };
+
     } catch (err) {
       logger.error('Error in getCurrentDayTest', { error: err.message, studentId });
       throw err;
@@ -324,12 +439,32 @@ const studentService = {
         return { canTake: false, reason: 'Test not available' };
       }
 
+      // Check if test is blocked
+      if (test.isBlocked) {
+        return { canTake: false, reason: 'Test is currently blocked by admin' };
+      }
+
       // Check if student is assigned to the batch for this test
       const studentBatches = student.assignedBatches.map(b => b.toString());
-      const testBatches = test.assignedDays.map(day => day.batchId.toString());
-      const hasAccess = studentBatches.some(batchId => testBatches.includes(batchId));
+      
+      // Check both assignedDays and assignedBatches for access
+      const dayBasedBatches = (test.assignedDays || []).map(day => day.batchId.toString());
+      const generalBatches = (test.assignedBatches || []).map(b => b.toString());
+      
+      // Combine all test batches
+      const allTestBatches = [...new Set([...dayBasedBatches, ...generalBatches])];
+      
+      const hasAccess = studentBatches.some(batchId => allTestBatches.includes(batchId));
 
       if (!hasAccess) {
+        console.log('Access check failed:', {
+          studentId,
+          testId,
+          studentBatches,
+          dayBasedBatches,
+          generalBatches,
+          allTestBatches
+        });
         return { canTake: false, reason: 'No access to this test' };
       }
 
@@ -362,11 +497,38 @@ const studentService = {
       const test = await Test.findById(testId);
 
       const studentBatches = student.assignedBatches.map(b => b._id.toString());
-      const testBatch = test.assignedDays.find(day =>
-        studentBatches.includes(day.batchId.toString())
-      )?.batchId;
+      
+      // Find the batch assignment - check both assignedDays and assignedBatches
+      let testBatch = null;
+      
+      // First try to find from assignedDays
+      if (test.assignedDays && test.assignedDays.length > 0) {
+        const dayAssignment = test.assignedDays.find(day =>
+          studentBatches.includes(day.batchId.toString())
+        );
+        if (dayAssignment) {
+          testBatch = dayAssignment.batchId;
+        }
+      }
+      
+      // If not found, try assignedBatches
+      if (!testBatch && test.assignedBatches && test.assignedBatches.length > 0) {
+        const batchAssignment = test.assignedBatches.find(batchId =>
+          studentBatches.includes(batchId.toString())
+        );
+        if (batchAssignment) {
+          testBatch = batchAssignment;
+        }
+      }
 
       if (!testBatch) {
+        console.log('No batch found for test session:', {
+          studentId,
+          testId,
+          studentBatches,
+          testAssignedDays: test.assignedDays,
+          testAssignedBatches: test.assignedBatches
+        });
         throw createError('No batch assignment found for this test', 400);
       }
 
@@ -529,6 +691,86 @@ const studentService = {
       };
     } catch (error) {
       logger.error('Error fetching student results', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getStudentResultById: async (studentId, resultId) => {
+    try {
+      const result = await Result.findOne({ _id: resultId, studentId })
+        .populate('testId', 'title description difficulty category duration referenceText')
+        .populate('batchId', 'name description')
+        .populate('studentId', 'name email')
+        .lean();
+
+      if (!result) {
+        throw createError('Result not found or you do not have access to it', 404);
+      }
+
+      // Get ranking context if available
+      let rankingContext = null;
+      if (result.rank) {
+        const totalResults = await Result.countDocuments({
+          batchId: result.batchId._id,
+          testId: result.testId._id,
+          status: 'completed'
+        });
+
+        rankingContext = {
+          rank: result.rank,
+          percentile: result.percentile,
+          totalParticipants: totalResults
+        };
+      }
+
+      // Calculate error statistics
+      const errorStats = {
+        totalErrors: result.stenographyErrors?.length || 0,
+        errorsByType: {},
+        errorsBySeverity: {}
+      };
+
+      if (result.stenographyErrors && result.stenographyErrors.length > 0) {
+        result.stenographyErrors.forEach(error => {
+          // Count by type
+          errorStats.errorsByType[error.type] = (errorStats.errorsByType[error.type] || 0) + 1;
+          // Count by severity
+          errorStats.errorsBySeverity[error.severity] = (errorStats.errorsBySeverity[error.severity] || 0) + 1;
+        });
+      }
+
+      // Get comparison with student's average
+      const studentAverage = await Result.aggregate([
+        { $match: { studentId: new mongoose.Types.ObjectId(studentId), status: 'completed' } },
+        {
+          $group: {
+            _id: null,
+            avgWpm: { $avg: '$wpm' },
+            avgAccuracy: { $avg: '$accuracy' },
+            avgSpeed: { $avg: '$speed' }
+          }
+        }
+      ]);
+
+      const comparison = studentAverage.length > 0 ? {
+        wpmDiff: result.wpm - studentAverage[0].avgWpm,
+        accuracyDiff: result.accuracy - studentAverage[0].avgAccuracy,
+        speedDiff: result.speed - studentAverage[0].avgSpeed,
+        studentAverage: {
+          wpm: Math.round(studentAverage[0].avgWpm * 100) / 100,
+          accuracy: Math.round(studentAverage[0].avgAccuracy * 100) / 100,
+          speed: Math.round(studentAverage[0].avgSpeed * 100) / 100
+        }
+      } : null;
+
+      return {
+        ...result,
+        rankingContext,
+        errorStats,
+        comparison
+      };
+    } catch (error) {
+      logger.error('Error fetching student result by ID', { error: error.message, studentId, resultId });
       throw error;
     }
   },

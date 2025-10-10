@@ -7,7 +7,11 @@ import {
   updateTest,
   deleteTest,
   assignTestToBatches,
-  removeTestFromBatches
+  removeTestFromBatches,
+  blockTest,
+  unblockTest,
+  assignTestToDates,
+  removeTestFromDates
 } from '../controllers/testController.js';
 import { authenticateFirebase } from '../middlewares/firebaseAuth.js';
 import { requireAdmin } from '../middlewares/authMiddleware.js';
@@ -22,6 +26,7 @@ router.use(requireAdmin);
 // Basic CRUD operations
 router.get('/', getAllTests);
 router.get('/:id', getTestById);
+// Handle both multipart/form-data (for file uploads) and application/json
 router.post('/', upload.single('audioFile'), createTest);
 router.put('/:id', updateTest);
 router.delete('/:id', deleteTest);
@@ -29,5 +34,13 @@ router.delete('/:id', deleteTest);
 // Batch assignment operations
 router.post('/:id/assign-batches', assignTestToBatches);
 router.delete('/:id/remove-batches', removeTestFromBatches);
+
+// Date assignment operations
+router.post('/:id/assign-dates', assignTestToDates);
+router.delete('/:id/remove-dates', removeTestFromDates);
+
+// Block/Unblock operations
+router.post('/:id/block', blockTest);
+router.post('/:id/unblock', unblockTest);
 
 export default router;

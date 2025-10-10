@@ -350,9 +350,11 @@ export const getBatchById = asyncHandler(async (req, res) => {
  */
 export const updateBatch = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
+  
+  // Handle both direct body and nested body formats
+  const updateData = req.body.body || req.body;
 
-  const batch = await batchService.updateBatch(id, updateData?.body);
+  const batch = await batchService.updateBatch(id, updateData);
 
   return sendResponse(
     res,

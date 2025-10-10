@@ -3,14 +3,56 @@ import Batch from '../models/Batch.js';
 import { AppError } from '../utils/AppError.js';
 
 const testService = {
-  createTest: async (title, audioURL, referenceText, adminId, duration = 300) => {
-    return await Test.create({
+  createTest: async (title, audioURL, referenceText, adminId, options = {}) => {
+    const {
+      description,
+      testType = 'practice',
+      difficulty = 'intermediate',
+      category = 'comprehensive',
+      duration = 300,
+      maxRetakes = 3,
+      availableFrom,
+      availableUntil,
+      assignedDays = [],
+      assignedBatches = []
+    } = options;
+
+    const testData = {
       title,
       audioURL,
       referenceText,
+      description,
+      testType,
+      difficulty,
+      category,
+      duration,
+      maxRetakes,
       uploadedBy: adminId,
-      duration
-    });
+      availableFrom,
+      availableUntil,
+      assignedDays,
+      assignedBatches,
+      isActive: true,
+      isPublished: true,
+      publishedAt: new Date()
+    };
+
+    const test = await Test.create(testData);
+
+    // If there are batch assignments, update the batch documents to maintain bidirectional relationships
+    if (assignedBatches.length > 0) {
+      await Batch.updateMany(
+        { _id: { $in: assignedBatches } },
+        { $addToSet: { tests: test._id } }
+      );
+    }
+
+    return await test.populate([
+      { path: 'uploadedBy', select: 'name email' },
+      { path: 'assignedBatches', select: 'name description' },
+      { path: 'assignedDays.batchId', select: 'name description' },
+      { path: 'assignedDays.assignedBy', select: 'name email' }
+    ]);
   },
   
   attachTextToTest: async (testId, referenceText) => {
@@ -135,6 +177,156 @@ const testService = {
       .sort({ createdAt: -1 });
     
     return tests;
+  },
+
+  // Block/Unblock test functionality
+  blockTest: async (testId, adminId, reason = '') => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    if (test.isBlocked) {
+      throw new AppError('Test is already blocked', 400);
+    }
+
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      {
+        isBlocked: true,
+        blockedBy: adminId,
+        blockedAt: new Date(),
+        blockReason: reason
+      },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('blockedBy', 'name email');
+
+    return updatedTest;
+  },
+
+  unblockTest: async (testId, adminId) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    if (!test.isBlocked) {
+      throw new AppError('Test is not blocked', 400);
+    }
+
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      {
+        isBlocked: false,
+        blockedBy: null,
+        blockedAt: null,
+        blockReason: null
+      },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email');
+
+    return updatedTest;
+  },
+
+  // Get tests for a specific date and batch
+  getTestsForDate: async (date, batchId) => {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const tests = await Test.find({
+      $or: [
+        // Day-specific assignments
+        {
+          'assignedDays': {
+            $elemMatch: {
+              batchId: batchId,
+              assignedDate: {
+                $gte: startOfDay,
+                $lte: endOfDay
+              },
+              isActive: true
+            }
+          }
+        },
+        // General batch assignments
+        {
+          assignedBatches: batchId,
+          $or: [
+            { availableFrom: { $lte: new Date() } },
+            { availableFrom: null }
+          ],
+          $or: [
+            { availableUntil: { $gte: new Date() } },
+            { availableUntil: null }
+          ]
+        }
+      ],
+      isActive: true,
+      isPublished: true
+    })
+      .populate('uploadedBy', 'name email')
+      .populate('assignedDays.batchId', 'name')
+      .populate('assignedBatches', 'name')
+      .sort({ 'assignedDays.priority': -1, createdAt: -1 });
+
+    return tests;
+  },
+
+  // Assign test to specific dates for batches
+  assignTestToDates: async (testId, dateAssignments, adminId) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    // Validate date assignments
+    for (const assignment of dateAssignments) {
+      if (!assignment.batchId || !assignment.assignedDate) {
+        throw new AppError('Each assignment must have batchId and assignedDate', 400);
+      }
+      
+      // Add metadata
+      assignment.assignedBy = adminId;
+      assignment.assignedAt = new Date();
+      assignment.isActive = assignment.isActive !== false;
+      assignment.priority = assignment.priority || 1;
+    }
+
+    // Add new assignments to existing ones
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      { $push: { assignedDays: { $each: dateAssignments } } },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('assignedDays.batchId', 'name')
+      .populate('assignedDays.assignedBy', 'name email');
+
+    return updatedTest;
+  },
+
+  // Remove test from specific dates
+  removeTestFromDates: async (testId, assignmentIds) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      { $pull: { assignedDays: { _id: { $in: assignmentIds } } } },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('assignedDays.batchId', 'name');
+
+    return updatedTest;
   }
 };
 

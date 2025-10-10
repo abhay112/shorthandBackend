@@ -11,14 +11,71 @@ class BatchService {
    * @returns {Object} batch
    */
    async createBatch(batchData) {
-    const { name } = batchData;
+    const { name, students: assignedStudents = [], tests: assignedTests = [] } = batchData;
 
     // uniqueness check
     const existing = await Batch.findOne({ name });
     if (existing) throw new AppError("Batch with this name already exists", 400);
 
+    // Create batch first
     const batch = new Batch(batchData);
     await batch.save();
+
+    // Handle bidirectional relationships for students
+    if (assignedStudents.length > 0) {
+      // Verify students exist and are approved
+      const students = await Student.find({
+        _id: { $in: assignedStudents },
+        isApproved: true,
+        isBlocked: false,
+      });
+
+      if (students.length !== assignedStudents.length) {
+        // Rollback batch creation
+        await Batch.findByIdAndDelete(batch._id);
+        throw new AppError('Some students are not approved or blocked', 400);
+      }
+
+      // Check batch capacity
+      if (assignedStudents.length > batch.maxStudents) {
+        // Rollback batch creation
+        await Batch.findByIdAndDelete(batch._id);
+        throw new AppError(`Batch capacity exceeded. Maximum ${batch.maxStudents} students allowed`, 400);
+      }
+
+      // Update student records with batch assignment
+      await Student.updateMany(
+        { _id: { $in: assignedStudents } },
+        { $addToSet: { assignedBatches: batch._id } }
+      );
+    }
+
+    // Handle bidirectional relationships for tests
+    if (assignedTests.length > 0) {
+      // Verify tests exist and are active
+      const tests = await Test.find({
+        _id: { $in: assignedTests },
+        isActive: true,
+      });
+
+      if (tests.length !== assignedTests.length) {
+        // Rollback batch creation and student assignments
+        await Batch.findByIdAndDelete(batch._id);
+        if (assignedStudents.length > 0) {
+          await Student.updateMany(
+            { _id: { $in: assignedStudents } },
+            { $pull: { assignedBatches: batch._id } }
+          );
+        }
+        throw new AppError('Some tests are not found or inactive', 400);
+      }
+
+      // Update test records with batch assignment
+      await Test.updateMany(
+        { _id: { $in: assignedTests } },
+        { $addToSet: { assignedBatches: batch._id } }
+      );
+    }
 
     // populate for friendly response
     await batch.populate("createdBy", "name email").execPopulate?.() || await batch.populate([
@@ -89,13 +146,102 @@ class BatchService {
    * @returns {Object} updated batch
    */
   async updateBatch(batchId, updateData) {
-    const { name } = updateData;
+    const { name, assignedStudents, assignedTests } = updateData;
+
+    console.log('Batch update called with:', { batchId, updateData });
+    console.log('Extracted fields:', { name, assignedStudents, assignedTests });
 
     if (name) {
       const existing = await Batch.findOne({ name, _id: { $ne: batchId } });
       if (existing) throw new AppError("Batch with this name already exists", 400);
     }
 
+    const batch = await Batch.findById(batchId);
+    if (!batch) throw new AppError("Batch not found", 404);
+
+    console.log('Current batch students:', batch.students);
+    console.log('Current batch tests:', batch.tests);
+
+    // Handle bidirectional relationship updates for students
+    if (assignedStudents !== undefined) {
+      const currentStudentIds = batch.students.map(id => id.toString());
+      const newStudentIds = assignedStudents || [];
+      
+      // Find students to add and remove
+      const toAdd = newStudentIds.filter(id => !currentStudentIds.includes(id));
+      const toRemove = currentStudentIds.filter(id => !newStudentIds.includes(id));
+
+      // Verify new students exist and are approved
+      if (toAdd.length > 0) {
+        const students = await Student.find({
+          _id: { $in: toAdd },
+          isApproved: true,
+          isBlocked: false,
+        });
+
+        if (students.length !== toAdd.length) {
+          throw new AppError('Some students are not approved or blocked', 400);
+        }
+
+        // Check batch capacity
+        const finalStudentCount = currentStudentIds.length - toRemove.length + toAdd.length;
+        if (finalStudentCount > batch.maxStudents) {
+          throw new AppError(`Batch capacity exceeded. Maximum ${batch.maxStudents} students allowed`, 400);
+        }
+
+        // Add batch to new students
+        await Student.updateMany(
+          { _id: { $in: toAdd } },
+          { $addToSet: { assignedBatches: batchId } }
+        );
+      }
+
+      // Remove batch from removed students
+      if (toRemove.length > 0) {
+        await Student.updateMany(
+          { _id: { $in: toRemove } },
+          { $pull: { assignedBatches: batchId } }
+        );
+      }
+    }
+
+    // Handle bidirectional relationship updates for tests
+    if (assignedTests !== undefined) {
+      const currentTestIds = batch.tests.map(id => id.toString());
+      const newTestIds = assignedTests || [];
+      
+      // Find tests to add and remove
+      const toAdd = newTestIds.filter(id => !currentTestIds.includes(id));
+      const toRemove = currentTestIds.filter(id => !newTestIds.includes(id));
+
+      // Verify new tests exist and are active
+      if (toAdd.length > 0) {
+        const tests = await Test.find({
+          _id: { $in: toAdd },
+          isActive: true,
+        });
+
+        if (tests.length !== toAdd.length) {
+          throw new AppError('Some tests are not found or inactive', 400);
+        }
+
+        // Add batch to new tests
+        await Test.updateMany(
+          { _id: { $in: toAdd } },
+          { $addToSet: { assignedBatches: batchId } }
+        );
+      }
+
+      // Remove batch from removed tests
+      if (toRemove.length > 0) {
+        await Test.updateMany(
+          { _id: { $in: toRemove } },
+          { $pull: { assignedBatches: batchId } }
+        );
+      }
+    }
+
+    // Prepare update payload
     const updatePayload = {
       ...(updateData.name !== undefined && { name: updateData.name }),
       ...(updateData.description !== undefined && { description: updateData.description }),
@@ -103,12 +249,12 @@ class BatchService {
       ...(updateData.startDate !== undefined && { startDate: updateData.startDate }),
       ...(updateData.endDate !== undefined && { endDate: updateData.endDate }),
       ...(updateData.isActive !== undefined && { isActive: updateData.isActive }),
-      // optionally allow passing students/tests arrays to replace current lists
-      ...(updateData.assignedStudents !== undefined && { students: updateData.assignedStudents }),
-      ...(updateData.assignedTests !== undefined && { tests: updateData.assignedTests }),
+      // Update students and tests arrays if provided
+      ...(assignedStudents !== undefined && { students: assignedStudents }),
+      ...(assignedTests !== undefined && { tests: assignedTests }),
     };
 
-    const batch = await Batch.findByIdAndUpdate(batchId, updatePayload, {
+    const updatedBatch = await Batch.findByIdAndUpdate(batchId, updatePayload, {
       new: true,
       runValidators: true
     })
@@ -116,9 +262,7 @@ class BatchService {
       .populate("students", "name email")
       .populate("tests", "title");
 
-    if (!batch) throw new AppError("Batch not found", 404);
-
-    return batch;
+    return updatedBatch;
   }
 
   /**

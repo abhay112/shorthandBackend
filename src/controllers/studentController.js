@@ -109,7 +109,9 @@ export const startTestSession = asyncHandler(async (req, res) => {
 export const endTestSession = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { sessionId } = req.params;
-  const resultData = req.body;
+  
+  // Handle both formats: direct data or nested under 'results' key
+  const resultData = req.body.results || req.body;
   
   // Validate required fields
   const requiredFields = ['wpm', 'accuracy', 'speed', 'totalWords', 'correctWords', 'incorrectWords', 'totalCharacters', 'correctCharacters', 'incorrectCharacters', 'mistakes'];
@@ -188,11 +190,14 @@ export const getStudentResultById = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { resultId } = req.params;
   
-  // This would be implemented in the service layer
-  // For now, return a placeholder
-  return sendResponse(res, 200, true, 'Result details endpoint - to be implemented', {}, {
+  const result = await studentService.getStudentResultById(studentId, resultId);
+  
+  return sendResponse(res, 200, true, 'Result details fetched successfully', { result }, {
     studentId: studentId,
     resultId: resultId,
+    wpm: result.wpm,
+    accuracy: result.accuracy,
+    rank: result.rank,
     ip: req.ip
   });
 });
