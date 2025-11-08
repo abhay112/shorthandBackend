@@ -141,7 +141,7 @@ export const getDashboardStats = asyncHandler(async (req, res) => {
 // controllers/adminController.js (updateStudent)
 export const updateStudent = asyncHandler(async (req, res) => {
   const studentId = req.params.id;
-  const { name, isApproved, isOnlineMode, assignedBatches, assignedTests, assignedShifts } = req.body;
+  const { name, isApproved, isOnlineMode, assignedBatches, assignedTests } = req.body;
 
   // Load full document
   const student = await Student.findById(studentId);
@@ -160,7 +160,7 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
   // Now sync relational arrays via adminService (only if arrays provided)
   let updatedStudent = saved;
-  if (Array.isArray(assignedBatches) || Array.isArray(assignedTests) || Array.isArray(assignedShifts)) {
+  if (Array.isArray(assignedBatches) || Array.isArray(assignedTests)) {
     // Option A: call sync functions one by one (they do their own population and return updated student)
     if (Array.isArray(assignedBatches)) {
       updatedStudent = await adminService.updateAssignedBatches(studentId, assignedBatches);
@@ -168,15 +168,11 @@ export const updateStudent = asyncHandler(async (req, res) => {
     if (Array.isArray(assignedTests)) {
       updatedStudent = await adminService.updateAssignedTests(studentId, assignedTests);
     }
-    if (Array.isArray(assignedShifts)) {
-      updatedStudent = await adminService.updateAssignedShifts(studentId, assignedShifts);
-    }
   } else {
     // populate for response
     updatedStudent = await Student.findById(studentId)
       .populate('assignedBatches', 'name startDate endDate')
       .populate('assignedTests', 'title duration')
-      .populate('assignedShifts', 'name date startTime durationMinutes')
       .lean();
   }
 

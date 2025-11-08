@@ -20,15 +20,10 @@ const dashboardService = {
     ]);
 
     const shifts = await Shift.find();
-    const shiftCounts = await Promise.all(
-      shifts.map(async (shift) => {
-        const count = await Student.countDocuments({ assignedShifts: shift._id });
-        return {
-          name: shift.name,
-          count
-        };
-      })
-    );
+    const shiftCounts = shifts.map(shift => ({
+      name: shift.name,
+      count: (shift.students || []).length,
+    }));
 
     const tests = await Test.find();
     const testPerformance = await Promise.all(

@@ -10,12 +10,13 @@ import {
   getMyAuditActivity,
   exportAuditLogs
 } from '../controllers/auditController.js';
-import { requireAuth } from '../middlewares/authMiddleware.js';
-import { requireRole } from '../middlewares/authMiddleware.js';
+import { authenticateFirebase } from '../middlewares/firebaseAuth.js';
+import { requireAuth, requireRole } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
 // All audit routes require authentication
+router.use(authenticateFirebase);
 router.use(requireAuth);
 
 /**

@@ -59,17 +59,5 @@ for (let i = 0; i < 10; i++) {
 await Test.insertMany(tests);
 console.log('✅ Inserted 10 tests');
 
-// 4. Optionally assign students to random shifts
-const allStudents = await Student.find();
-const allShifts = await Shift.find();
-
-for (const student of allStudents) {
-  const shiftCount = faker.number.int({ min: 1, max: 3 });
-  const randomShifts = faker.helpers.arrayElements(allShifts, shiftCount);
-  student.assignedShifts = randomShifts.map((s) => s._id);
-  await student.save();
-}
-console.log('✅ Assigned shifts to students');
-
 await mongoose.disconnect();
 console.log('🚀 Done seeding!');

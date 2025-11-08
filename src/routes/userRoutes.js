@@ -3,49 +3,51 @@ import {
   // Profile Management
   getStudentProfile,
   updateStudentProfile,
-  
+
   // Dashboard
   getStudentDashboard,
   getStudentStatistics,
-  
+
   // Test Management
   getCurrentDayTest,
   getUpcomingTests,
   checkTestAccess,
-  
+
   // Test Session Management
   startTestSession,
   endTestSession,
   pauseTestSession,
   resumeTestSession,
-  
+
   // Results Management
   getStudentResults,
   getStudentResultById,
-  
+
   // Rankings and Leaderboards
   getStudentRankings,
   getBatchLeaderboard,
-  
+
   // Batch Management
   getStudentBatches,
-  
+
   // Status and Health Check
   getStudentStatus,
-  
+
   // Legacy support
   getCurrentTestForShift,
   submitTestResult,
-  getStudentProgress
+  getStudentProgress,
 } from '../controllers/studentController.js';
-import { authenticateFirebase, authorizeRoles, requireApproval } from '../middlewares/firebaseAuth.js';
-import { asyncHandler } from '../utils/asyncHandler.js';
+import { authenticateFirebase, requireApproval } from '../middlewares/firebaseAuth.js';
+import { requireStudent } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
+const approvedRouter = express.Router();
+approvedRouter.use(requireApproval);
 
 // Apply authentication and student role authorization to all routes
 router.use(authenticateFirebase);
-router.use(authorizeRoles('student'));
+router.use(requireStudent);
 
 /**
  * @swagger
@@ -58,7 +60,7 @@ router.use(authorizeRoles('student'));
 
 /**
  * @swagger
- * /api/v1/students/profile:
+ * /api/v1/user/profile:
  *   get:
  *     summary: Get student profile
  *     tags: [Students]
@@ -82,7 +84,7 @@ router.get('/profile', getStudentProfile);
 
 /**
  * @swagger
- * /api/v1/students/profile:
+ * /api/v1/user/profile:
  *   patch:
  *     summary: Update student profile
  *     tags: [Students]
@@ -112,7 +114,7 @@ router.patch('/profile', updateStudentProfile);
 
 /**
  * @swagger
- * /api/v1/students/dashboard:
+ * /api/v1/user/dashboard:
  *   get:
  *     summary: Get student dashboard with all relevant data
  *     tags: [Students]
@@ -148,11 +150,11 @@ router.patch('/profile', updateStudentProfile);
  *                     upcomingTests:
  *                       type: array
  */
-router.get('/dashboard', requireApproval, getStudentDashboard);
+approvedRouter.get('/dashboard', getStudentDashboard);
 
 /**
  * @swagger
- * /api/v1/students/statistics:
+ * /api/v1/user/statistics:
  *   get:
  *     summary: Get student performance statistics
  *     tags: [Students]
@@ -162,13 +164,13 @@ router.get('/dashboard', requireApproval, getStudentDashboard);
  *       200:
  *         description: Statistics retrieved successfully
  */
-router.get('/statistics', requireApproval, getStudentStatistics);
+approvedRouter.get('/statistics', getStudentStatistics);
 
 // ==================== TEST MANAGEMENT ====================
 
 /**
  * @swagger
- * /api/v1/students/tests/current:
+ * /api/v1/user/tests/current:
  *   get:
  *     summary: Get current day's test for student
  *     tags: [Students]
@@ -178,11 +180,11 @@ router.get('/statistics', requireApproval, getStudentStatistics);
  *       200:
  *         description: Current test retrieved successfully
  */
-router.get('/tests/current', requireApproval, getCurrentDayTest);
+approvedRouter.get('/tests/current', getCurrentDayTest);
 
 /**
  * @swagger
- * /api/v1/students/tests/upcoming:
+ * /api/v1/user/tests/upcoming:
  *   get:
  *     summary: Get upcoming tests for student
  *     tags: [Students]
@@ -192,11 +194,11 @@ router.get('/tests/current', requireApproval, getCurrentDayTest);
  *       200:
  *         description: Upcoming tests retrieved successfully
  */
-router.get('/tests/upcoming', requireApproval, getUpcomingTests);
+approvedRouter.get('/tests/upcoming', getUpcomingTests);
 
 /**
  * @swagger
- * /api/v1/students/tests/{testId}/access:
+ * /api/v1/user/tests/{testId}/access:
  *   get:
  *     summary: Check if student can take a specific test
  *     tags: [Students]
@@ -213,13 +215,13 @@ router.get('/tests/upcoming', requireApproval, getUpcomingTests);
  *       200:
  *         description: Access check completed
  */
-router.get('/tests/:testId/access', requireApproval, checkTestAccess);
+approvedRouter.get('/tests/:testId/access', checkTestAccess);
 
 // ==================== TEST SESSION MANAGEMENT ====================
 
 /**
  * @swagger
- * /api/v1/students/tests/{testId}/start:
+ * /api/v1/user/tests/{testId}/start:
  *   post:
  *     summary: Start a test session
  *     tags: [Students]
@@ -238,11 +240,11 @@ router.get('/tests/:testId/access', requireApproval, checkTestAccess);
  *       403:
  *         description: Access denied or test not available
  */
-router.post('/tests/:testId/start', requireApproval, startTestSession);
+approvedRouter.post('/tests/:testId/start', startTestSession);
 
 /**
  * @swagger
- * /api/v1/students/sessions/{sessionId}/end:
+ * /api/v1/user/sessions/{sessionId}/end:
  *   post:
  *     summary: End a test session and submit results
  *     tags: [Students]
@@ -324,11 +326,11 @@ router.post('/tests/:testId/start', requireApproval, startTestSession);
  *       404:
  *         description: Session not found
  */
-router.post('/sessions/:sessionId/end', requireApproval, endTestSession);
+approvedRouter.post('/sessions/:sessionId/end', endTestSession);
 
 /**
  * @swagger
- * /api/v1/students/sessions/{sessionId}/pause:
+ * /api/v1/user/sessions/{sessionId}/pause:
  *   post:
  *     summary: Pause a test session
  *     tags: [Students]
@@ -345,11 +347,11 @@ router.post('/sessions/:sessionId/end', requireApproval, endTestSession);
  *       200:
  *         description: Test session paused
  */
-router.post('/sessions/:sessionId/pause', requireApproval, pauseTestSession);
+approvedRouter.post('/sessions/:sessionId/pause', pauseTestSession);
 
 /**
  * @swagger
- * /api/v1/students/sessions/{sessionId}/resume:
+ * /api/v1/user/sessions/{sessionId}/resume:
  *   post:
  *     summary: Resume a paused test session
  *     tags: [Students]
@@ -366,13 +368,13 @@ router.post('/sessions/:sessionId/pause', requireApproval, pauseTestSession);
  *       200:
  *         description: Test session resumed
  */
-router.post('/sessions/:sessionId/resume', requireApproval, resumeTestSession);
+approvedRouter.post('/sessions/:sessionId/resume', resumeTestSession);
 
 // ==================== RESULTS MANAGEMENT ====================
 
 /**
  * @swagger
- * /api/v1/students/results:
+ * /api/v1/user/results:
  *   get:
  *     summary: Get student's test results
  *     tags: [Students]
@@ -418,11 +420,11 @@ router.post('/sessions/:sessionId/resume', requireApproval, resumeTestSession);
  *       200:
  *         description: Results retrieved successfully
  */
-router.get('/results', requireApproval, getStudentResults);
+approvedRouter.get('/results', getStudentResults);
 
 /**
  * @swagger
- * /api/v1/students/results/{resultId}:
+ * /api/v1/user/results/{resultId}:
  *   get:
  *     summary: Get specific result details
  *     tags: [Students]
@@ -439,13 +441,13 @@ router.get('/results', requireApproval, getStudentResults);
  *       200:
  *         description: Result details retrieved successfully
  */
-router.get('/results/:resultId', requireApproval, getStudentResultById);
+approvedRouter.get('/results/:resultId', getStudentResultById);
 
 // ==================== RANKINGS AND LEADERBOARDS ====================
 
 /**
  * @swagger
- * /api/v1/students/rankings:
+ * /api/v1/user/rankings:
  *   get:
  *     summary: Get student's rankings
  *     tags: [Students]
@@ -473,11 +475,11 @@ router.get('/results/:resultId', requireApproval, getStudentResultById);
  *       200:
  *         description: Rankings retrieved successfully
  */
-router.get('/rankings', requireApproval, getStudentRankings);
+approvedRouter.get('/rankings', getStudentRankings);
 
 /**
  * @swagger
- * /api/v1/students/batches/{batchId}/leaderboard:
+ * /api/v1/user/batches/{batchId}/leaderboard:
  *   get:
  *     summary: Get batch leaderboard
  *     tags: [Students]
@@ -499,13 +501,13 @@ router.get('/rankings', requireApproval, getStudentRankings);
  *       200:
  *         description: Leaderboard retrieved successfully
  */
-router.get('/batches/:batchId/leaderboard', requireApproval, getBatchLeaderboard);
+approvedRouter.get('/batches/:batchId/leaderboard', getBatchLeaderboard);
 
 // ==================== BATCH MANAGEMENT ====================
 
 /**
  * @swagger
- * /api/v1/students/batches:
+ * /api/v1/user/batches:
  *   get:
  *     summary: Get student's assigned batches
  *     tags: [Students]
@@ -515,13 +517,13 @@ router.get('/batches/:batchId/leaderboard', requireApproval, getBatchLeaderboard
  *       200:
  *         description: Batches retrieved successfully
  */
-router.get('/batches', getStudentBatches);
+approvedRouter.get('/batches', getStudentBatches);
 
 // ==================== STATUS AND HEALTH CHECK ====================
 
 /**
  * @swagger
- * /api/v1/students/status:
+ * /api/v1/user/status:
  *   get:
  *     summary: Get student status and approval information
  *     tags: [Students]
@@ -537,7 +539,7 @@ router.get('/status', getStudentStatus);
 
 /**
  * @swagger
- * /api/v1/students/test/current:
+ * /api/v1/user/test/current:
  *   get:
  *     summary: Get current test (legacy endpoint)
  *     tags: [Students]
@@ -548,11 +550,11 @@ router.get('/status', getStudentStatus);
  *       200:
  *         description: Current test retrieved successfully
  */
-router.get('/test/current', requireApproval, getCurrentTestForShift);
+approvedRouter.get('/test/current', getCurrentTestForShift);
 
 /**
  * @swagger
- * /api/v1/students/test/submit:
+ * /api/v1/user/test/submit:
  *   post:
  *     summary: Submit test result (legacy endpoint)
  *     tags: [Students]
@@ -563,11 +565,11 @@ router.get('/test/current', requireApproval, getCurrentTestForShift);
  *       410:
  *         description: This endpoint is deprecated
  */
-router.post('/test/submit', requireApproval, submitTestResult);
+approvedRouter.post('/test/submit', submitTestResult);
 
 /**
  * @swagger
- * /api/v1/students/progress:
+ * /api/v1/user/progress:
  *   get:
  *     summary: Get student progress (legacy endpoint)
  *     tags: [Students]
@@ -578,6 +580,8 @@ router.post('/test/submit', requireApproval, submitTestResult);
  *       200:
  *         description: Progress retrieved successfully
  */
-router.get('/progress', requireApproval, getStudentProgress);
+approvedRouter.get('/progress', getStudentProgress);
+
+router.use(approvedRouter);
 
 export default router;

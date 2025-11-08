@@ -144,7 +144,7 @@ POST  /api/v1/student/test/submit     # Submit test result
   role: String,            // User role (student/admin)
   isApproved: Boolean,     // Admin approval status
   isBlocked: Boolean,      // Block status
-  assignedShifts: [ObjectId], // Assigned shifts
+  assignedBatches: [ObjectId], // Assigned batches
   results: [ObjectId],     // Test results
   lastLogin: Date,         // Last login timestamp
   createdAt: Date,         // Account creation date

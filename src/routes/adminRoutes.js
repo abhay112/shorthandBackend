@@ -1,16 +1,10 @@
 import express from 'express';
 import {
-  getAllStudents,
-  approveStudent,
   assignBatchToStudent,
   removeBatchFromStudent,
-  blockStudent,
   getDashboardStats,
-  getStudentById,
   updateStudent
 } from '../controllers/adminController.js';
-import { getAllTests } from '../controllers/testController.js';
-import { getAllBatches } from '../controllers/batchController.js';
 import { getAllResults } from '../controllers/resultController.js';
 import { getAllRankings } from '../controllers/rankingController.js';
 import { authenticateFirebase, requireAdmin } from '../middlewares/firebaseAuth.js';
@@ -22,21 +16,20 @@ router.use(authenticateFirebase);
 router.use(requireAdmin);
 
 // Student management routes
-router.get('/students', getAllStudents);    
-router.get('/students/:id', getStudentById);    
-router.put('/students/:id', /* protectAdmin, */ updateStudent);    
-router.post('/students/approve', approveStudent);            
-router.post('/assign-batch', assignBatchToStudent);
-router.delete('/remove-batch', removeBatchFromStudent);  
-router.post('/block', blockStudent);         
+router.put('/students/:id', updateStudent);
+router.post('/students/:id/batches', (req, res, next) => {
+  req.body.studentId = req.params.id;
+  return assignBatchToStudent(req, res, next);
+});
+router.delete('/students/:id/batches', (req, res, next) => {
+  req.body.studentId = req.params.id;
+  return removeBatchFromStudent(req, res, next);
+});
 
 // Dashboard route
 router.get('/dashboard', getDashboardStats);
 
-// Admin-specific routes with pagination
-router.get('/tests', getAllTests);
-router.get('/batches', getAllBatches);
-router.get('/result', getAllResults);
-router.get('/ranking', getAllRankings);
+router.get('/results', getAllResults);
+router.get('/rankings', getAllRankings);
 
 export default router;

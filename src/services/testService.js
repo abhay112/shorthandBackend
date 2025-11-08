@@ -92,16 +92,18 @@ const testService = {
           currentPage: page,
           totalPages,
           totalItems,
-          itemsPerPage: limit
-        }
+          itemsPerPage: limit,
+        },
       };
     }
     
     // Return all tests without pagination (for backward compatibility)
-    return await Test.find(filter)
+    const tests = await Test.find(filter)
       .populate('uploadedBy', 'name email')
       .populate('assignedBatches', 'name description')
       .sort({ createdAt: -1 });
+
+    return { tests, pagination: null };
   },
   
   getTestById: async (id) => {
@@ -180,7 +182,7 @@ const testService = {
       { new: true }
     );
     
-    return await this.getTestById(testId);
+    return await testService.getTestById(testId);
   },
   
   removeTestFromBatches: async (testId, batchIds) => {
@@ -202,7 +204,7 @@ const testService = {
       { new: true }
     );
     
-    return await this.getTestById(testId);
+    return await testService.getTestById(testId);
   },
   
   getTestsForBatch: async (batchId) => {

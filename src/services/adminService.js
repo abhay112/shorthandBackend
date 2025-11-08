@@ -4,7 +4,6 @@ import { AppError } from '../utils/AppError.js';
 import mongoose from 'mongoose';
 import { normalizeIds } from '../utils/helper.js';
 import Test from '../models/Test.js';
-import Shift from '../models/Shift.js';
 
 const adminService = {
   /**
@@ -264,70 +263,6 @@ const adminService = {
 },
 
 // updateAssignedShifts
-updateAssignedShifts: async (studentId, newShiftIds = []) => {
-  const newIds = normalizeIds(newShiftIds);
-  if ((newShiftIds || []).length && newIds.length === 0) {
-    throw new AppError('Invalid shift ids provided', 400);
-  }
-
-  const session = await mongoose.startSession();
-  try {
-    session.startTransaction();
-
-    const student = await Student.findById(studentId).session(session);
-    if (!student) throw new AppError('Student not found', 404);
-
-    const oldIds = (student.assignedShifts || []).map(String);
-    const toAdd = newIds.filter((id) => !oldIds.includes(id));
-    const toRemove = oldIds.filter((id) => !newIds.includes(id));
-
-    if (toAdd.length) {
-      const found = await Shift.find({ _id: { $in: toAdd } }, null, { session }).lean();
-      if (found.length !== toAdd.length) {
-        const foundIds = found.map(f => String(f._id));
-        const missing = toAdd.filter(id => !foundIds.includes(id));
-        throw new AppError(`One or more shifts not found: ${missing.join(',')}`, 404);
-      }
-    }
-
-    await Student.updateOne({ _id: studentId }, { $set: { assignedShifts: newIds } }, { session });
-
-    if (toAdd.length) {
-      await Shift.updateMany(
-        { _id: { $in: toAdd } },
-        { $addToSet: { students: student._id } },
-        { session }
-      );
-    }
-    if (toRemove.length) {
-      await Shift.updateMany(
-        { _id: { $in: toRemove } },
-        { $pull: { students: student._id } },
-        { session }
-      );
-    }
-
-    await session.commitTransaction();
-
-    const updatedStudent = await Student.findById(studentId)
-      .populate('assignedBatches', 'name startDate endDate')
-      .lean();
-
-    return updatedStudent;
-  } catch (err) {
-    if (session.inTransaction()) {
-      try {
-        await session.abortTransaction();
-      } catch (abortErr) {
-        console.error('Failed to abort transaction:', abortErr);
-      }
-    }
-    throw err;
-  } finally {
-    session.endSession();
-  }
-},
-
 };
 
 export default adminService;
