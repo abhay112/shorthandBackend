@@ -188,14 +188,25 @@ export const createTest = asyncHandler(async (req, res) => {
  *         description: Internal server error
  */
 export const getAllTests = asyncHandler(async (req, res) => {
-  const tests = await testService.getAllTests();
+  const { page, limit, testType, difficulty, category, isActive } = req.query;
+  
+  const options = {
+    page: page ? parseInt(page) : undefined,
+    limit: limit ? parseInt(limit) : undefined,
+    testType,
+    difficulty,
+    category,
+    isActive: isActive !== undefined ? isActive === 'true' : undefined
+  };
+
+  const result = await testService.getAllTests(options);
   
   return sendResponse(
     res,
     200,
     true,
     'Tests retrieved successfully',
-    { tests },
+    result,
     { adminId: req.user?.id }
   );
 });

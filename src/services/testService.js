@@ -63,8 +63,42 @@ const testService = {
     );
   },
   
-  getAllTests: async () => {
-    return await Test.find()
+  getAllTests: async (options = {}) => {
+    const { page, limit, testType, difficulty, category, isActive } = options;
+    
+    // Build filter object
+    const filter = {};
+    if (testType) filter.testType = testType;
+    if (difficulty) filter.difficulty = difficulty;
+    if (category) filter.category = category;
+    if (isActive !== undefined) filter.isActive = isActive;
+    
+    // If pagination is requested
+    if (page && limit) {
+      const skip = (page - 1) * limit;
+      const totalItems = await Test.countDocuments(filter);
+      const totalPages = Math.ceil(totalItems / limit);
+      
+      const tests = await Test.find(filter)
+        .populate('uploadedBy', 'name email')
+        .populate('assignedBatches', 'name description')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit);
+      
+      return {
+        tests,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalItems,
+          itemsPerPage: limit
+        }
+      };
+    }
+    
+    // Return all tests without pagination (for backward compatibility)
+    return await Test.find(filter)
       .populate('uploadedBy', 'name email')
       .populate('assignedBatches', 'name description')
       .sort({ createdAt: -1 });

@@ -9,6 +9,10 @@ import {
   getStudentById,
   updateStudent
 } from '../controllers/adminController.js';
+import { getAllTests } from '../controllers/testController.js';
+import { getAllBatches } from '../controllers/batchController.js';
+import { getAllResults } from '../controllers/resultController.js';
+import { getAllRankings } from '../controllers/rankingController.js';
 import { authenticateFirebase, requireAdmin } from '../middlewares/firebaseAuth.js';
 
 const router = express.Router();
@@ -28,5 +32,11 @@ router.post('/block', blockStudent);
 
 // Dashboard route
 router.get('/dashboard', getDashboardStats);
+
+// Admin-specific routes with pagination
+router.get('/tests', getAllTests);
+router.get('/batches', getAllBatches);
+router.get('/result', getAllResults);
+router.get('/ranking', getAllRankings);
 
 export default router;
