@@ -5,80 +5,6 @@ import { sendResponse } from '../utils/sendResponse.js';
 import { validateObjectId } from '../utils/validation.js';
 
 
-/**
- * @swagger
- * /api/v1/test:
- *   post:
- *     summary: Create a new test
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required:
- *               - title
- *               - referenceText
- *             properties:
- *               title:
- *                 type: string
- *                 description: Title of the test
- *               referenceText:
- *                 type: string
- *                 description: Reference text for the test
- *               description:
- *                 type: string
- *                 description: Description of the test
- *               testType:
- *                 type: string
- *                 enum: [curriculum, practice, assessment, special]
- *                 default: practice
- *                 description: Type of test determining availability strategy
- *               difficulty:
- *                 type: string
- *                 enum: [beginner, intermediate, advanced, expert]
- *                 default: intermediate
- *               category:
- *                 type: string
- *                 enum: [dictation, transcription, speed_test, accuracy_test, comprehensive]
- *                 default: comprehensive
- *               audioFile:
- *                 type: string
- *                 format: binary
- *                 description: Optional audio file for the test
- *               duration:
- *                 type: number
- *                 description: Duration in seconds (default 300)
- *               maxRetakes:
- *                 type: number
- *                 description: Maximum number of retakes allowed (default 3)
- *               availableFrom:
- *                 type: string
- *                 format: date-time
- *                 description: Global availability start time
- *               availableUntil:
- *                 type: string
- *                 format: date-time
- *                 description: Global availability end time
- *               assignedDays:
- *                 type: string
- *                 description: JSON string of day assignments array
- *               assignedBatches:
- *                 type: string
- *                 description: JSON string of batch IDs array for general assignment
- *     responses:
- *       201:
- *         description: Test created successfully
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const createTest = asyncHandler(async (req, res) => {
   const { 
     title, 
@@ -171,22 +97,6 @@ export const createTest = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test:
- *   get:
- *     summary: Get all tests
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Tests retrieved successfully
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const getAllTests = asyncHandler(async (req, res) => {
   const { page, limit, testType, difficulty, category, isActive } = req.query;
   
@@ -211,31 +121,6 @@ export const getAllTests = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}:
- *   get:
- *     summary: Get test by ID
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     responses:
- *       200:
- *         description: Test retrieved successfully
- *       404:
- *         description: Test not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const getTestById = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'test ID');
@@ -252,55 +137,163 @@ export const getTestById = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}:
- *   put:
- *     summary: Update test
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               title:
- *                 type: string
- *               referenceText:
- *                 type: string
- *               duration:
- *                 type: number
- *               isActive:
- *                 type: boolean
- *     responses:
- *       200:
- *         description: Test updated successfully
- *       404:
- *         description: Test not found
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const updateTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
   validateObjectId(id, 'test ID');
-  
-  const test = await testService.updateTest(id, updateData);
-  
+
+  const {
+    title,
+    description,
+    referenceText,
+    testType,
+    difficulty,
+    category,
+    duration,
+    maxRetakes,
+    availableFrom,
+    availableUntil,
+    assignedDays,
+    assignedBatches,
+    settings,
+    isActive,
+    isPublished,
+    allowViewWhenBlocked,
+    isBlocked,
+    blockReason,
+    publishNow,
+    removeAudio
+  } = req.body;
+
+  const parseBoolean = (value) => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    return undefined;
+  };
+
+  const parseDate = (value) => {
+    if (value === undefined || value === null || value === '' || value === 'null') return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new AppError(`Invalid date value provided: ${value}`, 400);
+    }
+    return date;
+  };
+
+  const parseAssignmentDate = (value, fieldLabel) => {
+    if (value === undefined || value === null || value === '') return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new AppError(`Invalid date value provided for ${fieldLabel}`, 400);
+    }
+    return date;
+  };
+
+  const parseJsonField = (rawValue, fieldName) => {
+    if (rawValue === undefined || rawValue === null || rawValue === '') return undefined;
+    if (Array.isArray(rawValue) || typeof rawValue === 'object') {
+      return rawValue;
+    }
+    try {
+      return JSON.parse(rawValue);
+    } catch (error) {
+      throw new AppError(`Invalid JSON format for ${fieldName}`, 400);
+    }
+  };
+
+  // Handle assigned days parsing and metadata enrichment
+  let parsedAssignedDays = parseJsonField(assignedDays, 'assignedDays');
+  if (parsedAssignedDays !== undefined) {
+    if (!Array.isArray(parsedAssignedDays)) {
+      throw new AppError('assignedDays must be an array', 400);
+    }
+
+    parsedAssignedDays = parsedAssignedDays.map((assignment) => {
+      if (!assignment.batchId || !assignment.assignedDate) {
+        throw new AppError('Each day assignment must have batchId and assignedDate', 400);
+      }
+
+      const assignedAt = assignment.assignedAt ? new Date(assignment.assignedAt) : new Date();
+      if (Number.isNaN(assignedAt.getTime())) {
+        throw new AppError('Invalid date value provided for assignedAt', 400);
+      }
+
+      const priority =
+        assignment.priority !== undefined
+          ? Number(assignment.priority) || 1
+          : 1;
+
+      return {
+        ...assignment,
+        assignedBy: assignment.assignedBy || req.user.id,
+        assignedAt,
+        isActive: assignment.isActive !== false,
+        priority,
+        dayNumber: assignment.dayNumber !== undefined ? Number(assignment.dayNumber) : assignment.dayNumber,
+        assignedDate: parseAssignmentDate(assignment.assignedDate, 'assignedDate'),
+        availableFrom: parseAssignmentDate(assignment.availableFrom, 'availableFrom'),
+        availableUntil: parseAssignmentDate(assignment.availableUntil, 'availableUntil')
+      };
+    });
+  }
+
+  // Handle batch assignments
+  let parsedAssignedBatches = parseJsonField(assignedBatches, 'assignedBatches');
+  if (parsedAssignedBatches !== undefined) {
+    if (!Array.isArray(parsedAssignedBatches)) {
+      throw new AppError('assignedBatches must be an array', 400);
+    }
+  }
+
+  // Handle settings updates
+  let parsedSettings = parseJsonField(settings, 'settings');
+  if (parsedSettings !== undefined && typeof parsedSettings !== 'object') {
+    throw new AppError('settings must be an object', 400);
+  }
+
+  // Collect flattened settings.* fields if provided via multipart forms
+  const flattenedSettings = Object.keys(req.body).reduce((acc, key) => {
+    if (!key.startsWith('settings.')) return acc;
+    const settingKey = key.replace('settings.', '');
+    acc[settingKey] = parseBoolean(req.body[key]) ?? req.body[key];
+    return acc;
+  }, {});
+
+  if (Object.keys(flattenedSettings).length > 0) {
+    parsedSettings = { ...(parsedSettings || {}), ...flattenedSettings };
+  }
+
+  const updatePayload = {
+    ...(title !== undefined && { title }),
+    ...(description !== undefined && { description }),
+    ...(referenceText !== undefined && { referenceText }),
+    ...(testType !== undefined && { testType }),
+    ...(difficulty !== undefined && { difficulty }),
+    ...(category !== undefined && { category }),
+    ...(duration !== undefined && { duration: Number(duration) }),
+    ...(maxRetakes !== undefined && { maxRetakes: Number(maxRetakes) }),
+    ...(availableFrom !== undefined && { availableFrom: parseDate(availableFrom) }),
+    ...(availableUntil !== undefined && { availableUntil: parseDate(availableUntil) }),
+    ...(parsedAssignedDays !== undefined && { assignedDays: parsedAssignedDays }),
+    ...(parsedAssignedBatches !== undefined && { assignedBatches: parsedAssignedBatches }),
+    ...(parsedSettings !== undefined && { settings: parsedSettings }),
+    ...(isActive !== undefined && { isActive: parseBoolean(isActive) }),
+    ...(isPublished !== undefined && { isPublished: parseBoolean(isPublished) }),
+    ...(allowViewWhenBlocked !== undefined && { allowViewWhenBlocked: parseBoolean(allowViewWhenBlocked) }),
+    ...(isBlocked !== undefined && { isBlocked: parseBoolean(isBlocked) }),
+    ...(blockReason !== undefined && { blockReason }),
+    ...(publishNow !== undefined && { publishNow: parseBoolean(publishNow) }),
+    ...(removeAudio !== undefined && { removeAudio: parseBoolean(removeAudio) })
+  };
+
+  if (req.file?.path) {
+    updatePayload.audioURL = req.file.path;
+  }
+
+  const test = await testService.updateTest(id, updatePayload, { adminId: req.user.id });
+
   return sendResponse(
     res,
     200,
@@ -311,31 +304,6 @@ export const updateTest = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}:
- *   delete:
- *     summary: Delete test
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     responses:
- *       200:
- *         description: Test deleted successfully
- *       404:
- *         description: Test not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const deleteTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'test ID');
@@ -352,47 +320,6 @@ export const deleteTest = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/assign-batches:
- *   post:
- *     summary: Assign test to batches
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - batchIds
- *             properties:
- *               batchIds:
- *                 type: array
- *                 items:
- *                   type: string
- *                 description: Array of batch IDs to assign
- *     responses:
- *       200:
- *         description: Test assigned to batches successfully
- *       400:
- *         description: Bad request
- *       404:
- *         description: Test not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const assignTestToBatches = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { batchIds } = req.body;
@@ -420,88 +347,6 @@ export const assignTestToBatches = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/remove-batches:
- *   delete:
- *     summary: Remove test from batches
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - batchIds
- *             properties:
- *               batchIds:
- *                 type: array
- *                 items:
- *                   type: string
- *                 description: Array of batch IDs to remove
- *     responses:
- *       200:
- *         description: Test removed from batches successfully
- *       400:
- *         description: Bad request
- *       404:
- *         description: Test not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
-/**
- * @swagger
- * /api/v1/test/{id}/remove-batches:
- *   delete:
- *     summary: Remove test from batches
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - batchIds
- *             properties:
- *               batchIds:
- *                 type: array
- *                 items:
- *                   type: string
- *                 description: Array of batch IDs to remove
- *     responses:
- *       200:
- *         description: Test removed from batches successfully
- *       400:
- *         description: Bad request
- *       404:
- *         description: Test not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const removeTestFromBatches = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { batchIds } = req.body;
@@ -522,43 +367,6 @@ export const removeTestFromBatches = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/block:
- *   post:
- *     summary: Block a test (students can only view content, not take test)
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: false
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               reason:
- *                 type: string
- *                 description: Reason for blocking the test
- *     responses:
- *       200:
- *         description: Test blocked successfully
- *       404:
- *         description: Test not found
- *       400:
- *         description: Test is already blocked
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const blockTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body;
@@ -575,33 +383,6 @@ export const blockTest = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/unblock:
- *   post:
- *     summary: Unblock a test
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     responses:
- *       200:
- *         description: Test unblocked successfully
- *       404:
- *         description: Test not found
- *       400:
- *         description: Test is not blocked
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const unblockTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -617,68 +398,6 @@ export const unblockTest = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/assign-dates:
- *   post:
- *     summary: Assign test to specific dates for batches
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - dateAssignments
- *             properties:
- *               dateAssignments:
- *                 type: array
- *                 items:
- *                   type: object
- *                   required:
- *                     - batchId
- *                     - assignedDate
- *                   properties:
- *                     batchId:
- *                       type: string
- *                       description: Batch ID
- *                     assignedDate:
- *                       type: string
- *                       format: date
- *                       description: Date when test should be available
- *                     priority:
- *                       type: number
- *                       description: Priority (1-10, higher = more important)
- *                     availableFrom:
- *                       type: string
- *                       format: date-time
- *                       description: Specific time when test becomes available
- *                     availableUntil:
- *                       type: string
- *                       format: date-time
- *                       description: Specific time when test expires
- *     responses:
- *       200:
- *         description: Test assigned to dates successfully
- *       404:
- *         description: Test not found
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const assignTestToDates = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { dateAssignments } = req.body;
@@ -699,47 +418,6 @@ export const assignTestToDates = asyncHandler(async (req, res) => {
   );
 });
 
-/**
- * @swagger
- * /api/v1/test/{id}/remove-dates:
- *   delete:
- *     summary: Remove test from specific date assignments
- *     tags: [Tests]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Test ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - assignmentIds
- *             properties:
- *               assignmentIds:
- *                 type: array
- *                 items:
- *                   type: string
- *                 description: Array of assignment IDs to remove
- *     responses:
- *       200:
- *         description: Test removed from dates successfully
- *       404:
- *         description: Test not found
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
 export const removeTestFromDates = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { assignmentIds } = req.body;

@@ -11,6 +11,10 @@ const resultSchema = new mongoose.Schema({
     ref: 'Batch',
     required: true 
   },
+  shiftId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Shift'
+  },
   testId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Test',

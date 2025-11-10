@@ -8,6 +8,10 @@ import { createError } from '../utils/AppError.js';
 import logger from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
+import {
+  processResultSideEffects,
+  calculateAndSaveRanking as calculateAndSaveRankingUtil
+} from './utils/resultUtils.js';
 
 const studentService = {
   // Authentication and Profile Management
@@ -635,8 +639,13 @@ const studentService = {
       session.results.push(result._id);
       await session.save();
 
-      // Calculate and save ranking
-      await studentService.calculateAndSaveRanking(studentId, session.batchId, session.testId, result);
+      // Process result side effects (student linkage, statistics, ranking)
+      await processResultSideEffects({
+        studentId,
+        batchId: session.batchId,
+        testId: session.testId,
+        result
+      });
 
       logger.info('Test session completed', {
         studentId,
@@ -776,71 +785,7 @@ const studentService = {
   },
 
   calculateAndSaveRanking: async (studentId, batchId, testId, result) => {
-    try {
-      // Get all results for this test in this batch
-      const allResults = await Result.find({
-        batchId,
-        testId,
-        status: 'completed'
-      }).sort({ wpm: -1, accuracy: -1 });
-
-      const totalStudents = allResults.length;
-      const studentResult = allResults.find(r => r.studentId.toString() === studentId.toString());
-
-      if (!studentResult) {
-        throw createError('Student result not found for ranking', 404);
-      }
-
-      const rank = allResults.findIndex(r => r._id.toString() === studentResult._id.toString()) + 1;
-      const percentile = Math.round(((totalStudents - rank + 1) / totalStudents) * 100);
-
-      // Get previous ranking for comparison
-      const previousRanking = await StudentRanking.findOne({
-        studentId,
-        batchId,
-        testId
-      });
-
-      const previousRank = previousRanking ? previousRanking.rank : null;
-      const rankChange = previousRank ? previousRank - rank : 0;
-
-      // Save or update ranking
-      await StudentRanking.findOneAndUpdate(
-        { studentId, batchId, testId },
-        {
-          studentId,
-          batchId,
-          testId,
-          rank,
-          percentile,
-          wpm: result.wpm,
-          accuracy: result.accuracy,
-          speed: result.speed,
-          totalStudents,
-          totalAttempts: allResults.length,
-          previousRank,
-          rankChange,
-          testDate: result.submittedAt
-        },
-        { upsert: true, new: true }
-      );
-
-      // Update result with ranking
-      result.rank = rank;
-      result.percentile = percentile;
-      await result.save();
-
-      logger.info('Ranking calculated and saved', {
-        studentId,
-        batchId,
-        testId,
-        rank,
-        percentile
-      });
-    } catch (error) {
-      logger.error('Error calculating ranking', { error: error.message, studentId, batchId, testId });
-      throw error;
-    }
+    return calculateAndSaveRankingUtil(studentId, batchId, testId, result);
   },
 
   getStudentRankings: async (studentId, options = {}) => {

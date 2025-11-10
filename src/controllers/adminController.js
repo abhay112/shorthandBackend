@@ -5,29 +5,6 @@ import { createError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 import Student from '../models/Student.js';
 
-/**
- * @swagger
- * /api/v1/admin/students:
- *   get:
- *     summary: Get all students
- *     tags: [Admins]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Students retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Success'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
-/**
- * Get all students
- */
 export const getAllStudents = asyncHandler(async (req, res) => {
   const students = await adminService.getAllStudents();
 
@@ -38,9 +15,6 @@ export const getAllStudents = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get a student by ID
- */
 export const getStudentById = asyncHandler(async (req, res) => {
   const { id } = req.params;
   if (!id) throw createError('Student ID is required', 400);
@@ -55,9 +29,6 @@ export const getStudentById = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Approve or disapprove a student
- */
 export const approveStudent = asyncHandler(async (req, res) => {
   const { email, status } = req.body;
   if (!email || status === undefined) throw createError('Email and status are required', 400);
@@ -72,9 +43,6 @@ export const approveStudent = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Assign batch to a student
- */
 export const assignBatchToStudent = asyncHandler(async (req, res) => {
   const { studentId, batchId } = req.body;
   if (!studentId || !batchId) throw createError('Student ID and Batch ID are required', 400);
@@ -89,9 +57,6 @@ export const assignBatchToStudent = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Remove batch from a student
- */
 export const removeBatchFromStudent = asyncHandler(async (req, res) => {
   const { studentId, batchId } = req.body;
   if (!studentId || !batchId) throw createError('Student ID and Batch ID are required', 400);
@@ -106,9 +71,6 @@ export const removeBatchFromStudent = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Block or unblock a student
- */
 export const blockStudent = asyncHandler(async (req, res) => {
   const { studentId, block } = req.body;
   if (!studentId || block === undefined) throw createError('Student ID and block status are required', 400);

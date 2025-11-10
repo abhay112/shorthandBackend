@@ -118,28 +118,165 @@ const testService = {
     return test;
   },
   
-  updateTest: async (id, updateData) => {
-    const { title, audioURL, referenceText, duration, isActive } = updateData;
-    
-    const test = await Test.findByIdAndUpdate(
-      id,
-      {
-        ...(title && { title }),
-        ...(audioURL && { audioURL }),
-        ...(referenceText !== undefined && { referenceText }),
-        ...(duration !== undefined && { duration }),
-        ...(isActive !== undefined && { isActive }),
-      },
-      { new: true, runValidators: true }
-    )
-      .populate('uploadedBy', 'name email')
-      .populate('assignedBatches', 'name description');
-    
+  updateTest: async (id, updateData = {}, options = {}) => {
+    const adminId = options.adminId;
+
+    const test = await Test.findById(id);
     if (!test) {
       throw new AppError('Test not found', 404);
     }
-    
-    return test;
+
+    const updateOps = { $set: {} };
+    const addToSet = (field, value) => {
+      if (value !== undefined) {
+        updateOps.$set[field] = value;
+      }
+    };
+
+    const unsetOps = {};
+
+    // Basic metadata updates
+    addToSet('title', updateData.title);
+    addToSet('description', updateData.description);
+    addToSet('referenceText', updateData.referenceText);
+    addToSet('testType', updateData.testType);
+    addToSet('difficulty', updateData.difficulty);
+    addToSet('category', updateData.category);
+
+    // Numeric fields
+    if (updateData.duration !== undefined) {
+      addToSet('duration', Number(updateData.duration));
+    }
+    if (updateData.maxRetakes !== undefined) {
+      addToSet('maxRetakes', Number(updateData.maxRetakes));
+    }
+
+    // Availability windows (allow null to clear)
+    if (updateData.availableFrom !== undefined) {
+      addToSet('availableFrom', updateData.availableFrom);
+    }
+    if (updateData.availableUntil !== undefined) {
+      addToSet('availableUntil', updateData.availableUntil);
+    }
+
+    // Settings deep merge
+    if (updateData.settings && typeof updateData.settings === 'object') {
+      const mergedSettings = {
+        ...(test.settings?.toObject?.() || test.settings || {}),
+        ...updateData.settings
+      };
+      addToSet('settings', mergedSettings);
+    }
+
+    // Assigned days replace
+    if (Array.isArray(updateData.assignedDays)) {
+      addToSet('assignedDays', updateData.assignedDays);
+    }
+
+    // Assigned batches diff handling
+    if (Array.isArray(updateData.assignedBatches)) {
+      const currentBatchIds = test.assignedBatches.map((batchId) => batchId.toString());
+      const nextBatchIds = updateData.assignedBatches.map((batchId) => batchId.toString());
+
+      const batchesToAdd = nextBatchIds.filter((batchId) => !currentBatchIds.includes(batchId));
+      const batchesToRemove = currentBatchIds.filter((batchId) => !nextBatchIds.includes(batchId));
+
+      if (batchesToAdd.length > 0) {
+        await Batch.updateMany(
+          { _id: { $in: batchesToAdd } },
+          { $addToSet: { tests: test._id } }
+        );
+      }
+
+      if (batchesToRemove.length > 0) {
+        await Batch.updateMany(
+          { _id: { $in: batchesToRemove } },
+          { $pull: { tests: test._id } }
+        );
+      }
+
+      addToSet('assignedBatches', updateData.assignedBatches);
+    }
+
+    // Audio handling
+    if (updateData.audioURL) {
+      addToSet('audioURL', updateData.audioURL);
+    }
+    if (updateData.removeAudio) {
+      unsetOps.audioURL = '';
+    }
+
+    // Status flags
+    if (updateData.isActive !== undefined) {
+      addToSet('isActive', updateData.isActive);
+    }
+
+    // Publishing logic
+    if (updateData.isPublished !== undefined) {
+      if (updateData.isPublished) {
+        addToSet('isPublished', true);
+        addToSet('publishedAt', test.publishedAt || new Date());
+      } else {
+        addToSet('isPublished', false);
+        addToSet('publishedAt', null);
+      }
+    } else if (updateData.publishNow) {
+      addToSet('isPublished', true);
+      addToSet('publishedAt', new Date());
+    }
+
+    // Blocking logic
+    if (updateData.isBlocked !== undefined) {
+      if (updateData.isBlocked) {
+        addToSet('isBlocked', true);
+        addToSet('blockedBy', adminId || test.blockedBy);
+        addToSet('blockedAt', new Date());
+        if (updateData.blockReason !== undefined) {
+          addToSet('blockReason', updateData.blockReason);
+        }
+      } else {
+        addToSet('isBlocked', false);
+        addToSet('blockedBy', null);
+        addToSet('blockedAt', null);
+        addToSet('blockReason', null);
+      }
+    } else if (updateData.blockReason !== undefined) {
+      addToSet('blockReason', updateData.blockReason);
+    }
+
+    if (updateData.allowViewWhenBlocked !== undefined) {
+      addToSet('allowViewWhenBlocked', updateData.allowViewWhenBlocked);
+    }
+
+    // Clean unset operations
+    const hasUnsetUpdates = Object.keys(unsetOps).length > 0;
+    if (hasUnsetUpdates) {
+      updateOps.$unset = unsetOps;
+    }
+
+    const hasSetUpdates = Object.keys(updateOps.$set).length > 0;
+
+    if (!hasSetUpdates && !hasUnsetUpdates) {
+      await test.populate('uploadedBy', 'name email')
+        .populate('assignedBatches', 'name description')
+        .populate('assignedDays.batchId', 'name description')
+        .populate('assignedDays.assignedBy', 'name email');
+      return test;
+    }
+
+    updateOps.$set.updatedAt = new Date();
+
+    const updatedTest = await Test.findByIdAndUpdate(
+      id,
+      updateOps,
+      { new: true, runValidators: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('assignedBatches', 'name description')
+      .populate('assignedDays.batchId', 'name description')
+      .populate('assignedDays.assignedBy', 'name email');
+
+    return updatedTest;
   },
   
   deleteTest: async (id) => {

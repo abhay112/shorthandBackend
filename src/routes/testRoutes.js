@@ -28,7 +28,7 @@ router.get('/', getAllTests);
 router.get('/:id', getTestById);
 // Handle both multipart/form-data (for file uploads) and application/json
 router.post('/', upload.single('audioFile'), createTest);
-router.put('/:id', updateTest);
+router.put('/:id', upload.single('audioFile'), updateTest);
 router.delete('/:id', deleteTest);
 
 // Batch assignment operations

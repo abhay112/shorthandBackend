@@ -1,8 +1,50 @@
 import Result from '../models/Result.js';
+import { AppError } from '../utils/AppError.js';
+import { processResultSideEffects } from './utils/resultUtils.js';
 
 const resultService = {
-  submitResult: async (data) => {
-    return await Result.create(data);
+  submitResult: async (data, options = {}) => {
+    const requiredFields = [
+      'studentId',
+      'batchId',
+      'testId',
+      'sessionId',
+      'wpm',
+      'accuracy',
+      'speed',
+      'totalWords',
+      'correctWords',
+      'incorrectWords',
+      'totalCharacters',
+      'correctCharacters',
+      'incorrectCharacters'
+    ];
+
+    const missingFields = requiredFields.filter((field) => data[field] === undefined || data[field] === null);
+    if (missingFields.length > 0) {
+      throw new AppError(`Missing required result fields: ${missingFields.join(', ')}`, 400);
+    }
+
+    const result = await Result.create({
+      ...data,
+      submittedAt: data.submittedAt ? new Date(data.submittedAt) : new Date()
+    });
+
+    if (options.processSideEffects !== false) {
+      await processResultSideEffects({
+        studentId: result.studentId,
+        batchId: result.batchId,
+        testId: result.testId,
+        result
+      });
+    }
+
+    await result
+      .populate('studentId', 'name email')
+      .populate('testId', 'title category difficulty')
+      .populate('batchId', 'name description');
+
+    return result;
   },
 
   getResultsByShift: async (shiftId) => {

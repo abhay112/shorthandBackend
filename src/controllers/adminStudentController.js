@@ -3,6 +3,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { createError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 import logger from '../utils/logger.js';
+import { validateObjectId } from '../utils/validation.js';
 
 export const listStudents = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, status, search } = req.query;
@@ -27,9 +28,7 @@ export const listStudents = asyncHandler(async (req, res) => {
 
 export const getStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!id) {
-    throw createError('Student ID is required', 400);
-  }
+  validateObjectId(id, 'student ID');
 
   const student = await adminStudentService.findById(id);
 
@@ -50,9 +49,7 @@ export const getStudent = asyncHandler(async (req, res) => {
 
 export const approveStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!id) {
-    throw createError('Student ID is required', 400);
-  }
+  validateObjectId(id, 'student ID');
 
   const student = await adminStudentService.approve(id);
 
@@ -73,9 +70,7 @@ export const approveStudent = asyncHandler(async (req, res) => {
 
 export const blockStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!id) {
-    throw createError('Student ID is required', 400);
-  }
+  validateObjectId(id, 'student ID');
 
   const student = await adminStudentService.block(id);
 
@@ -96,9 +91,7 @@ export const blockStudent = asyncHandler(async (req, res) => {
 
 export const unblockStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!id) {
-    throw createError('Student ID is required', 400);
-  }
+  validateObjectId(id, 'student ID');
 
   const student = await adminStudentService.unblock(id);
 
@@ -123,6 +116,10 @@ export const bulkApproveStudents = asyncHandler(async (req, res) => {
     throw createError('Student IDs array is required', 400);
   }
 
+  studentIds.forEach((studentId, index) =>
+    validateObjectId(studentId, `studentIds[${index}]`),
+  );
+
   const result = await adminStudentService.bulkApprove(studentIds);
 
   logger.info('Bulk approve students', {
@@ -146,6 +143,10 @@ export const bulkBlockStudents = asyncHandler(async (req, res) => {
   if (!Array.isArray(studentIds) || studentIds.length === 0) {
     throw createError('Student IDs array is required', 400);
   }
+
+  studentIds.forEach((studentId, index) =>
+    validateObjectId(studentId, `studentIds[${index}]`),
+  );
 
   const result = await adminStudentService.bulkBlock(studentIds);
 

@@ -1,17 +1,64 @@
 import resultService from '../services/resultService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { AppError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 
-export const submitResult = async (req, res) => {
-  const result = await resultService.submitResult(req.body);
-  res.json(result);
-};
+export const submitResult = asyncHandler(async (req, res) => {
+  const payload = req.body.results || req.body;
+  const studentId = req.user?.id || payload.studentId;
 
-export const getResultsByShift = async (req, res) => {
-  const shiftId = req.params.shiftId;
+  if (!studentId) {
+    throw new AppError('studentId is required to submit a result', 400);
+  }
+
+  if (!payload.batchId) {
+    throw new AppError('batchId is required to submit a result', 400);
+  }
+
+  if (!payload.testId) {
+    throw new AppError('testId is required to submit a result', 400);
+  }
+
+  const result = await resultService.submitResult(
+    {
+      ...payload,
+      studentId
+    }
+  );
+
+  return sendResponse(
+    res,
+    201,
+    true,
+    'Result submitted successfully',
+    { result },
+    {
+      studentId,
+      batchId: result.batchId,
+      testId: result.testId,
+      resultId: result._id
+    }
+  );
+});
+
+export const getResultsByShift = asyncHandler(async (req, res) => {
+  const { shiftId } = req.params;
+
+  if (!shiftId) {
+    throw new AppError('shiftId is required', 400);
+  }
+
   const results = await resultService.getResultsByShift(shiftId);
-  res.json(results);
-};
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Shift results retrieved successfully',
+    { results },
+    { shiftId }
+  );
+});
 
 /**
  * Get all results with pagination for admin
