@@ -118,7 +118,7 @@ Routes marked **Approved Only** also require the student to pass the `requireApp
       "currentTest": {
         "test": { "_id": "651a...", "title": "Court Reporting Drill", "duration": 300 },
         "canTake": true,
-        "attemptsRemaining": 2,
+        "remainingAttempts": 2,
         "availableUntil": "2025-11-10T17:00:00.000Z"
       },
       "recentResults": [
@@ -236,8 +236,8 @@ Routes marked **Approved Only** also require the student to pass the `requireApp
   }
   ```
 
-### GET `/api/v1/user/tests/{testId}/access`
 - **Description:** Check if the student can take the specified test right now.  
+  Calling this endpoint **consumes an attempt immediately** by reserving it for the student.
 - **Success Response (200)**
   ```json
   {
@@ -246,16 +246,14 @@ Routes marked **Approved Only** also require the student to pass the `requireApp
     "data": {
       "accessCheck": {
         "canTake": true,
-        "reason": null,
-        "attemptsRemaining": 2,
-        "maxRetakes": 3,
-        "isBlocked": false,
-        "availableFrom": "2025-11-10T09:00:00.000Z",
-        "availableUntil": "2025-11-10T17:00:00.000Z"
+        "remainingAttempts": 2,
+        "attemptNumber": 2,
+        "reservationSessionId": "f3b978ea-0d9b-4e09-9e46-8a6d1fa49f7c"
       }
     }
   }
   ```
+  > Only call `/access` when the student is ready to begin; repeated calls will eventually exhaust the allowed retakes.
 
 ### GET `/api/v1/user/test/current` (Legacy)
 - Same payload as `/tests/current`; provided for backwards compatibility.
@@ -274,8 +272,6 @@ Routes marked **Approved Only** also require the student to pass the `requireApp
     "data": {
       "session": {
         "sessionId": "27c0-7d2f-9f3",
-        "attemptNumber": 1,
-        "timeExpires": "2025-11-10T10:15:00.000Z",
         "test": {
           "id": "651a...",
           "title": "Court Reporting Drill",
@@ -287,7 +283,16 @@ Routes marked **Approved Only** also require the student to pass the `requireApp
             "showProgress": true,
             "autoSubmit": true
           }
-        }
+        },
+        "content": {
+          "version": 1,
+          "referenceText": "Complete the following dictation...",
+          "audio": null,
+          "audioMeta": null
+        },
+        "attemptNumber": 2,
+        "remainingAttempts": 1,
+        "timeExpires": "2025-11-10T10:15:00.000Z"
       }
     }
   }
@@ -546,13 +551,13 @@ Use the following snippet when instructing Cursor/AI tools:
 > Implement the Shorthnd LMS student dashboard using these APIs (all require `Authorization: Bearer <firebase-id-token>` and approved routes require `isApproved`).  
 > - `GET /api/v1/user/tests/current` → `{ primaryTest, allTestsForToday[] }`  
 > - `GET /api/v1/user/tests/upcoming` → grouped schedule  
-> - `GET /api/v1/user/tests/{testId}/access` → eligibility info  
-> - `POST /api/v1/user/tests/{testId}/start` → `{ sessionId, attemptNumber, timeExpires, test }`  
+> - `GET /api/v1/user/tests/{testId}/access` → **consumes** an attempt and returns `{ remainingAttempts, attemptNumber, reservationSessionId }`  
+> - `POST /api/v1/user/tests/{testId}/start` → `{ sessionId, test, content, attemptNumber, remainingAttempts, timeExpires }`  
 > - `POST /api/v1/user/sessions/{sessionId}/end` → `{ result }` (see metrics schema)  
 > - `GET /api/v1/user/results?page=&limit=` → paginated attempts  
 > - `GET /api/v1/user/results/{resultId}` → detail view  
 > - `GET /api/v1/user/rankings` and `/batches/{batchId}/leaderboard` → charts  
-> Persist session ID, handle 401/403 redirect, show 410 deprecation warnings, and respect availability windows.
+> Persist session ID, handle 401/403 redirect, surface 410 deprecation warnings, and respect availability windows.
 
 ---
 

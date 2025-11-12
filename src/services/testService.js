@@ -1,5 +1,6 @@
 import Test from '../models/Test.js';
 import Batch from '../models/Batch.js';
+import TestContent from '../models/TestContent.js';
 import { AppError } from '../utils/AppError.js';
 
 const testService = {
@@ -17,10 +18,10 @@ const testService = {
       assignedBatches = []
     } = options;
 
+    const now = new Date();
+
     const testData = {
       title,
-      audioURL,
-      referenceText,
       description,
       testType,
       difficulty,
@@ -34,10 +35,26 @@ const testService = {
       assignedBatches,
       isActive: true,
       isPublished: true,
-      publishedAt: new Date()
+      publishedAt: now,
+      audioURL,
+      referenceText
     };
 
     const test = await Test.create(testData);
+
+    const content = await TestContent.create({
+      testId: test._id,
+      version: 1,
+      status: 'published',
+      referenceText,
+      audio: audioURL ? { url: audioURL } : undefined,
+      createdBy: adminId,
+      publishedAt: now
+    });
+
+    test.currentContent = content._id;
+    test.latestVersion = 1;
+    await test.save();
 
     // If there are batch assignments, update the batch documents to maintain bidirectional relationships
     if (assignedBatches.length > 0) {
@@ -51,16 +68,31 @@ const testService = {
       { path: 'uploadedBy', select: 'name email' },
       { path: 'assignedBatches', select: 'name description' },
       { path: 'assignedDays.batchId', select: 'name description' },
-      { path: 'assignedDays.assignedBy', select: 'name email' }
+      { path: 'assignedDays.assignedBy', select: 'name email' },
+      { path: 'currentContent', select: 'version status referenceText audio publishedAt' }
     ]);
   },
   
   attachTextToTest: async (testId, referenceText) => {
-    return await Test.findByIdAndUpdate(
-      testId,
-      { referenceText },
-      { new: true }
-    );
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    if (!test.currentContent) {
+      throw new AppError('Test content not initialised', 400);
+    }
+
+    const content = await TestContent.findById(test.currentContent);
+    if (content) {
+      content.referenceText = referenceText;
+      await content.save();
+    }
+
+    test.referenceText = referenceText;
+    await test.save();
+
+    return test;
   },
   
   getAllTests: async (options = {}) => {
@@ -82,6 +114,7 @@ const testService = {
       const tests = await Test.find(filter)
         .populate('uploadedBy', 'name email')
         .populate('assignedBatches', 'name description')
+        .populate('currentContent', 'version status publishedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
@@ -101,6 +134,7 @@ const testService = {
     const tests = await Test.find(filter)
       .populate('uploadedBy', 'name email')
       .populate('assignedBatches', 'name description')
+      .populate('currentContent', 'version status publishedAt')
       .sort({ createdAt: -1 });
 
     return { tests, pagination: null };
@@ -109,7 +143,9 @@ const testService = {
   getTestById: async (id) => {
     const test = await Test.findById(id)
       .populate('uploadedBy', 'name email')
-      .populate('assignedBatches', 'name description students');
+      .populate('assignedBatches', 'name description students')
+      .populate('currentContent', 'version status referenceText audio publishedAt')
+      .populate('draftContent', 'version status referenceText audio updatedAt');
     
     if (!test) {
       throw new AppError('Test not found', 404);
@@ -121,56 +157,42 @@ const testService = {
   updateTest: async (id, updateData = {}, options = {}) => {
     const adminId = options.adminId;
 
-    const test = await Test.findById(id);
+    const test = await Test.findById(id)
+      .populate('currentContent')
+      .populate('draftContent');
     if (!test) {
       throw new AppError('Test not found', 404);
     }
 
-    const updateOps = { $set: {} };
-    const addToSet = (field, value) => {
-      if (value !== undefined) {
-        updateOps.$set[field] = value;
+    const assignIfDefined = (field, transformer) => {
+      if (updateData[field] !== undefined) {
+        test[field] = transformer ? transformer(updateData[field]) : updateData[field];
       }
     };
 
-    const unsetOps = {};
+    assignIfDefined('title');
+    assignIfDefined('description');
+    assignIfDefined('testType');
+    assignIfDefined('difficulty');
+    assignIfDefined('category');
+    assignIfDefined('duration', Number);
+    assignIfDefined('maxRetakes', Number);
+    assignIfDefined('availableFrom', (value) => value);
+    assignIfDefined('availableUntil', (value) => value);
+    assignIfDefined('isActive');
+    assignIfDefined('allowViewWhenBlocked');
 
-    // Basic metadata updates
-    addToSet('title', updateData.title);
-    addToSet('description', updateData.description);
-    addToSet('referenceText', updateData.referenceText);
-    addToSet('testType', updateData.testType);
-    addToSet('difficulty', updateData.difficulty);
-    addToSet('category', updateData.category);
-
-    // Numeric fields
-    if (updateData.duration !== undefined) {
-      addToSet('duration', Number(updateData.duration));
-    }
-    if (updateData.maxRetakes !== undefined) {
-      addToSet('maxRetakes', Number(updateData.maxRetakes));
-    }
-
-    // Availability windows (allow null to clear)
-    if (updateData.availableFrom !== undefined) {
-      addToSet('availableFrom', updateData.availableFrom);
-    }
-    if (updateData.availableUntil !== undefined) {
-      addToSet('availableUntil', updateData.availableUntil);
-    }
-
-    // Settings deep merge
+    // Settings merge
     if (updateData.settings && typeof updateData.settings === 'object') {
-      const mergedSettings = {
+      test.settings = {
         ...(test.settings?.toObject?.() || test.settings || {}),
         ...updateData.settings
       };
-      addToSet('settings', mergedSettings);
     }
 
-    // Assigned days replace
+    // Assigned days replacement
     if (Array.isArray(updateData.assignedDays)) {
-      addToSet('assignedDays', updateData.assignedDays);
+      test.assignedDays = updateData.assignedDays;
     }
 
     // Assigned batches diff handling
@@ -195,88 +217,140 @@ const testService = {
         );
       }
 
-      addToSet('assignedBatches', updateData.assignedBatches);
-    }
-
-    // Audio handling
-    if (updateData.audioURL) {
-      addToSet('audioURL', updateData.audioURL);
-    }
-    if (updateData.removeAudio) {
-      unsetOps.audioURL = '';
-    }
-
-    // Status flags
-    if (updateData.isActive !== undefined) {
-      addToSet('isActive', updateData.isActive);
-    }
-
-    // Publishing logic
-    if (updateData.isPublished !== undefined) {
-      if (updateData.isPublished) {
-        addToSet('isPublished', true);
-        addToSet('publishedAt', test.publishedAt || new Date());
-      } else {
-        addToSet('isPublished', false);
-        addToSet('publishedAt', null);
-      }
-    } else if (updateData.publishNow) {
-      addToSet('isPublished', true);
-      addToSet('publishedAt', new Date());
+      test.assignedBatches = updateData.assignedBatches;
     }
 
     // Blocking logic
     if (updateData.isBlocked !== undefined) {
       if (updateData.isBlocked) {
-        addToSet('isBlocked', true);
-        addToSet('blockedBy', adminId || test.blockedBy);
-        addToSet('blockedAt', new Date());
+        test.isBlocked = true;
+        test.blockedBy = adminId || test.blockedBy;
+        test.blockedAt = new Date();
         if (updateData.blockReason !== undefined) {
-          addToSet('blockReason', updateData.blockReason);
+          test.blockReason = updateData.blockReason;
         }
       } else {
-        addToSet('isBlocked', false);
-        addToSet('blockedBy', null);
-        addToSet('blockedAt', null);
-        addToSet('blockReason', null);
+        test.isBlocked = false;
+        test.blockedBy = null;
+        test.blockedAt = null;
+        test.blockReason = null;
       }
     } else if (updateData.blockReason !== undefined) {
-      addToSet('blockReason', updateData.blockReason);
+      test.blockReason = updateData.blockReason;
     }
 
-    if (updateData.allowViewWhenBlocked !== undefined) {
-      addToSet('allowViewWhenBlocked', updateData.allowViewWhenBlocked);
+    const contentChanges = {};
+    if (updateData.referenceText !== undefined) {
+      contentChanges.referenceText = updateData.referenceText;
+    }
+    if (updateData.audioURL) {
+      contentChanges.audio = { url: updateData.audioURL };
+    }
+    if (updateData.removeAudio) {
+      contentChanges.audio = null;
     }
 
-    // Clean unset operations
-    const hasUnsetUpdates = Object.keys(unsetOps).length > 0;
-    if (hasUnsetUpdates) {
-      updateOps.$unset = unsetOps;
+    let draftContentDoc = test.draftContent
+      ? (test.draftContent.referenceText ? test.draftContent : await TestContent.findById(test.draftContent))
+      : null;
+
+    if (Object.keys(contentChanges).length > 0) {
+      if (!draftContentDoc) {
+        const baseContent = test.currentContent
+          ? (test.currentContent.referenceText ? test.currentContent : await TestContent.findById(test.currentContent))
+          : null;
+        const nextVersion = (test.latestVersion || 1) + 1;
+
+        draftContentDoc = await TestContent.create({
+          testId: test._id,
+          version: nextVersion,
+          status: 'draft',
+          referenceText: contentChanges.referenceText ?? baseContent?.referenceText ?? '',
+          audio: contentChanges.audio !== undefined ? contentChanges.audio : baseContent?.audio,
+          createdBy: adminId
+        });
+
+        test.draftContent = draftContentDoc._id;
+        test.latestVersion = nextVersion;
+      } else {
+        if (contentChanges.referenceText !== undefined) {
+          draftContentDoc.referenceText = contentChanges.referenceText;
+        }
+        if (contentChanges.audio !== undefined) {
+          draftContentDoc.audio = contentChanges.audio;
+        }
+        draftContentDoc.updatedBy = adminId || draftContentDoc.updatedBy;
+        draftContentDoc.updatedAt = new Date();
+        await draftContentDoc.save();
+      }
     }
 
-    const hasSetUpdates = Object.keys(updateOps.$set).length > 0;
+    const publishRequested = Boolean(updateData.publishNow);
 
-    if (!hasSetUpdates && !hasUnsetUpdates) {
-      await test.populate('uploadedBy', 'name email')
-        .populate('assignedBatches', 'name description')
-        .populate('assignedDays.batchId', 'name description')
-        .populate('assignedDays.assignedBy', 'name email');
-      return test;
+    if (updateData.isPublished !== undefined) {
+      test.isPublished = updateData.isPublished;
+      test.publishedAt = updateData.isPublished ? (test.publishedAt || new Date()) : null;
     }
 
-    updateOps.$set.updatedAt = new Date();
+    if (publishRequested) {
+      let contentToPublish = draftContentDoc;
 
-    const updatedTest = await Test.findByIdAndUpdate(
-      id,
-      updateOps,
-      { new: true, runValidators: true }
-    )
-      .populate('uploadedBy', 'name email')
-      .populate('assignedBatches', 'name description')
-      .populate('assignedDays.batchId', 'name description')
-      .populate('assignedDays.assignedBy', 'name email');
+      if (!contentToPublish && test.currentContent) {
+        contentToPublish = test.currentContent.referenceText
+          ? test.currentContent
+          : await TestContent.findById(test.currentContent);
+      }
 
-    return updatedTest;
+      if (!contentToPublish) {
+        throw new AppError('No content available to publish', 400);
+      }
+
+      contentToPublish.status = 'published';
+      contentToPublish.publishedAt = new Date();
+      contentToPublish.updatedBy = adminId || contentToPublish.updatedBy;
+      await contentToPublish.save();
+
+      await TestContent.updateMany(
+        {
+          testId: test._id,
+          status: 'published',
+          _id: { $ne: contentToPublish._id }
+        },
+        { status: 'archived' }
+      );
+
+      test.currentContent = contentToPublish._id;
+      test.draftContent = null;
+      test.referenceText = contentToPublish.referenceText || '';
+      test.audioURL = contentToPublish.audio?.url || null;
+      test.isPublished = true;
+      test.publishedAt = new Date();
+    } else if (updateData.removeAudio && !draftContentDoc) {
+      // remove audio from currently published version when no draft is used
+      if (test.currentContent) {
+        const currentContentDoc = test.currentContent.referenceText
+          ? test.currentContent
+          : await TestContent.findById(test.currentContent);
+        if (currentContentDoc) {
+          currentContentDoc.audio = null;
+          currentContentDoc.updatedBy = adminId || currentContentDoc.updatedBy;
+          await currentContentDoc.save();
+        }
+      }
+      test.audioURL = null;
+    }
+
+    test.updatedAt = new Date();
+    await test.save();
+
+    await test.populate('uploadedBy', 'name email');
+    await test.populate('assignedBatches', 'name description');
+    await test.populate('assignedDays.batchId', 'name description');
+    await test.populate('assignedDays.assignedBy', 'name email');
+    await test.populate('currentContent', 'version status referenceText audio publishedAt');
+    await test.populate('draftContent', 'version status referenceText audio updatedAt');
+
+    return test;
   },
   
   deleteTest: async (id) => {

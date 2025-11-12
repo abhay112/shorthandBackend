@@ -10,13 +10,14 @@ const testSchema = new mongoose.Schema({
     type: String, 
     trim: true 
   },
-  audioURL: { 
-    type: String, 
-    required: false 
+  audioURL: {
+    type: String,
+    required: false
   },
-  referenceText: { 
-    type: String, 
-    required: true 
+  referenceText: {
+    type: String,
+    required: false,
+    default: ''
   },
   
   // Test metadata
@@ -24,6 +25,20 @@ const testSchema = new mongoose.Schema({
     type: String, 
     enum: ['beginner', 'intermediate', 'advanced', 'expert'], 
     default: 'intermediate' 
+  },
+
+  // Content version pointers
+  currentContent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'TestContent'
+  },
+  draftContent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'TestContent'
+  },
+  latestVersion: {
+    type: Number,
+    default: 0
   },
   category: { 
     type: String, 
@@ -220,6 +235,8 @@ testSchema.index({ 'assignedDays.batchId': 1, 'assignedDays.assignedDate': 1 });
 testSchema.index({ 'assignedDays.dayNumber': 1, 'assignedDays.priority': -1 });
 testSchema.index({ availableFrom: 1, availableUntil: 1 });
 testSchema.index({ createdAt: -1 });
+testSchema.index({ currentContent: 1 });
+testSchema.index({ draftContent: 1 });
 
 // Virtual for checking if test is currently available
 testSchema.virtual('isCurrentlyAvailable').get(function() {

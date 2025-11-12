@@ -332,13 +332,13 @@ Errors return the same envelope with `success: false` and `message` describing t
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/user/tests/current` | — | `primaryTest` (highest priority) + `allTestsForToday` array. |
 | `GET` | `/api/v1/user/tests/upcoming` | `days`, `limit` (optional) | Upcoming assignments grouped by date with priority and time windows. |
-| `GET` | `/api/v1/user/tests/{testId}/access` | — | Eligibility check (`canTake`, attempts left, block state, availability window). |
+| `GET` | `/api/v1/user/tests/{testId}/access` | — | Reserves an attempt immediately and returns updated `remainingAttempts`, `attemptNumber`, `reservationSessionId`. |
 | `GET` | `/api/v1/user/test/current` | — | Legacy alias of `/tests/current`. |
 
 #### Session Lifecycle (requires approval)
 | Method | Path | Body Expectations | Returns |
 |--------|------|-------------------|---------|
-| `POST` | `/api/v1/user/tests/{testId}/start` | none | Creates session. Data: `{ sessionId, attemptNumber, timeExpires, test: { id, title, duration, settings } }`. |
+| `POST` | `/api/v1/user/tests/{testId}/start` | none | Promotes the latest reservation or creates a session; returns `{ sessionId, test, content, attemptNumber, remainingAttempts, timeExpires }`. |
 | `POST` | `/api/v1/user/sessions/{sessionId}/end` | See payload below | Persists metrics, returns saved `result` populated with `testId` & `batchId`, plus ranking fields when available. |
 | `POST` | `/api/v1/user/sessions/{sessionId}/pause` | none | Placeholder; currently returns success without state change. |
 | `POST` | `/api/v1/user/sessions/{sessionId}/resume` | none | Placeholder; returns success. |
@@ -382,7 +382,8 @@ The backend also accepts the same shape nested under a `results` key.
 #### Example Prompt Snippet for Cursor
 > You are building the Shorthnd LMS student dashboard. Use the following API contract:  
 > • `GET /api/v1/user/tests/current` → `{ primaryTest, allTestsForToday[] }`  
-> • `POST /api/v1/user/tests/{testId}/start` → `{ sessionId, attemptNumber, timeExpires, test }`  
+> • `GET /api/v1/user/tests/{testId}/access` → **consumes** an attempt and returns `{ remainingAttempts, attemptNumber, reservationSessionId }`  
+> • `POST /api/v1/user/tests/{testId}/start` → `{ sessionId, test, content, attemptNumber, remainingAttempts, timeExpires }`  
 > • `POST /api/v1/user/sessions/{sessionId}/end` with metrics payload → returns `{ result }` including `rank` & `percentile`  
 > • `GET /api/v1/user/results?page=&limit=` for table data  
 > • `GET /api/v1/user/rankings` & `/batches/{batchId}/leaderboard` for charts  

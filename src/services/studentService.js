@@ -1,6 +1,7 @@
 import Student from '../models/Student.js';
 import Batch from '../models/Batch.js';
 import Test from '../models/Test.js';
+import TestContent from '../models/TestContent.js';
 import Result from '../models/Result.js';
 import TestSession from '../models/TestSession.js';
 import StudentRanking from '../models/StudentRanking.js';
@@ -12,6 +13,77 @@ import {
   processResultSideEffects,
   calculateAndSaveRanking as calculateAndSaveRankingUtil
 } from './utils/resultUtils.js';
+
+const toIdString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (value._id) return toIdString(value._id);
+  if (value.id) return toIdString(value.id);
+  return value.toString();
+};
+
+const determineTestBatchId = (studentBatchIds, test) => {
+  if (Array.isArray(test.assignedDays)) {
+    for (const day of test.assignedDays) {
+      const batchIdStr = toIdString(day.batchId);
+      if (batchIdStr && studentBatchIds.includes(batchIdStr)) {
+        return batchIdStr;
+      }
+    }
+  }
+
+  if (Array.isArray(test.assignedBatches)) {
+    for (const batchId of test.assignedBatches) {
+      const batchIdStr = toIdString(batchId);
+      if (batchIdStr && studentBatchIds.includes(batchIdStr)) {
+        return batchIdStr;
+      }
+    }
+  }
+
+  return null;
+};
+
+const getAttemptUsage = async (studentId, testId) => {
+  const [completedAttempts, reservedAttempts] = await Promise.all([
+    Result.countDocuments({ studentId, testId, status: 'completed' }),
+    TestSession.countDocuments({
+      studentId,
+      testId,
+      status: { $in: ['not_started', 'in_progress'] }
+    })
+  ]);
+
+  return {
+    completedAttempts,
+    reservedAttempts,
+    totalUsed: completedAttempts + reservedAttempts
+  };
+};
+
+const reserveTestAttempt = async ({ studentId, studentBatchIds, test, attemptNumber }) => {
+  const batchIdStr = determineTestBatchId(studentBatchIds, test);
+
+  if (!batchIdStr) {
+    throw createError('No batch assignment found for this test', 400);
+  }
+
+  const session = await TestSession.create({
+    studentId,
+    batchId: new mongoose.Types.ObjectId(batchIdStr),
+    testId: test._id,
+    sessionId: uuidv4(),
+    currentAttempt: attemptNumber,
+    totalAttempts: 0,
+    status: 'not_started',
+    timeStarted: null,
+    timeCompleted: null,
+    timeExpires: null
+  });
+
+  return session;
+};
 
 const studentService = {
   // Authentication and Profile Management
@@ -310,7 +382,7 @@ const studentService = {
         }
 
         // Check if student can take this test (considering blocking)
-        const accessCheck = await studentService.canStudentTakeTest(studentId, test._id);
+        const accessCheck = await studentService.canStudentTakeTest(studentId, test._id, { consumeAttempt: false });
         
         // Get completion info for this test
         const existingAttempts = await Result.find({ 
@@ -429,58 +501,86 @@ const studentService = {
     }
   },
 
-  canStudentTakeTest: async (studentId, testId) => {
+  canStudentTakeTest: async (studentId, testId, options = {}) => {
+    const { consumeAttempt = false } = options;
+
     try {
-      // Check if student exists and is approved
       const student = await Student.findById(studentId);
       if (!student || !student.isApproved || student.isBlocked) {
         return { canTake: false, reason: 'Student not approved or blocked' };
       }
 
-      // Check if test exists and is active
       const test = await Test.findById(testId);
       if (!test || !test.isActive || !test.isPublished) {
         return { canTake: false, reason: 'Test not available' };
       }
 
-      // Check if test is blocked
       if (test.isBlocked) {
         return { canTake: false, reason: 'Test is currently blocked by admin' };
       }
 
-      // Check if student is assigned to the batch for this test
-      const studentBatches = student.assignedBatches.map(b => b.toString());
-      
-      // Check both assignedDays and assignedBatches for access
-      const dayBasedBatches = (test.assignedDays || []).map(day => day.batchId.toString());
-      const generalBatches = (test.assignedBatches || []).map(b => b.toString());
-      
-      // Combine all test batches
-      const allTestBatches = [...new Set([...dayBasedBatches, ...generalBatches])];
-      
-      const hasAccess = studentBatches.some(batchId => allTestBatches.includes(batchId));
+      const studentBatchIds = (student.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
+
+      const dayBasedBatches = (test.assignedDays || []).map(day => toIdString(day.batchId)).filter(Boolean);
+      const generalBatches = (test.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
+
+      const allTestBatches = Array.from(new Set([...dayBasedBatches, ...generalBatches]));
+      const hasAccess = studentBatchIds.some(batchId => allTestBatches.includes(batchId));
 
       if (!hasAccess) {
-        console.log('Access check failed:', {
+        logger.debug('Access check failed', {
           studentId,
           testId,
-          studentBatches,
+          studentBatchIds,
           dayBasedBatches,
-          generalBatches,
-          allTestBatches
+          generalBatches
         });
         return { canTake: false, reason: 'No access to this test' };
       }
 
-      // Check retake limits
-      const existingResults = await Result.find({ studentId, testId });
-      const completedAttempts = existingResults.filter(r => r.status === 'completed').length;
+      const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
+      const remainingAttempts = test.maxRetakes - totalUsed;
 
-      if (completedAttempts >= test.maxRetakes) {
+      if (consumeAttempt) {
+        if (remainingAttempts <= 0) {
+          return { canTake: false, reason: 'Maximum retakes exceeded' };
+        }
+
+        const attemptNumber = totalUsed + 1;
+        const reservation = await reserveTestAttempt({
+          studentId,
+          studentBatchIds,
+          test,
+          attemptNumber
+        });
+
+        return {
+          canTake: true,
+          remainingAttempts: Math.max(0, remainingAttempts - 1),
+          attemptNumber,
+          reservationSessionId: reservation.sessionId
+        };
+      }
+
+      if (remainingAttempts <= 0) {
+        if (reservedAttempts > 0) {
+          return {
+            canTake: true,
+            remainingAttempts: 0,
+            reservedAttempts,
+            nextAttemptNumber: totalUsed
+          };
+        }
         return { canTake: false, reason: 'Maximum retakes exceeded' };
       }
 
-      return { canTake: true, remainingAttempts: test.maxRetakes - completedAttempts };
+      return {
+        canTake: true,
+        remainingAttempts,
+        nextAttemptNumber: totalUsed + 1,
+        reservedAttempts,
+        completedAttempts
+      };
     } catch (error) {
       logger.error('Error checking test access', { error: error.message, studentId, testId });
       throw error;
@@ -490,101 +590,111 @@ const studentService = {
   // Test Session Management
   startTestSession: async (studentId, testId) => {
     try {
-      // Validate test access
-      const accessCheck = await studentService.canStudentTakeTest(studentId, testId);
+      const accessCheck = await studentService.canStudentTakeTest(studentId, testId, { consumeAttempt: false });
       if (!accessCheck.canTake) {
-        throw createError(accessCheck.reason, 403);
+        throw createError(accessCheck.reason || 'Test access denied', 403);
       }
 
-      // Get student's batch for this test
-      const student = await Student.findById(studentId).populate('assignedBatches');
-      const test = await Test.findById(testId);
+      const [student, test] = await Promise.all([
+        Student.findById(studentId).populate('assignedBatches'),
+        Test.findById(testId).populate('currentContent')
+      ]);
 
-      const studentBatches = student.assignedBatches.map(b => b._id.toString());
-      
-      // Find the batch assignment - check both assignedDays and assignedBatches
-      let testBatch = null;
-      
-      // First try to find from assignedDays
-      if (test.assignedDays && test.assignedDays.length > 0) {
-        const dayAssignment = test.assignedDays.find(day =>
-          studentBatches.includes(day.batchId.toString())
-        );
-        if (dayAssignment) {
-          testBatch = dayAssignment.batchId;
-        }
-      }
-      
-      // If not found, try assignedBatches
-      if (!testBatch && test.assignedBatches && test.assignedBatches.length > 0) {
-        const batchAssignment = test.assignedBatches.find(batchId =>
-          studentBatches.includes(batchId.toString())
-        );
-        if (batchAssignment) {
-          testBatch = batchAssignment;
-        }
+      if (!student || !student.isApproved || student.isBlocked) {
+        throw createError('Student not approved or blocked', 403);
       }
 
-      if (!testBatch) {
-        console.log('No batch found for test session:', {
+      if (!test || !test.isActive || !test.isPublished) {
+        throw createError('Test not available', 404);
+      }
+
+      const studentBatchIds = (student.assignedBatches || []).map(batch => toIdString(batch._id || batch)).filter(Boolean);
+
+      const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
+      const attemptLimit = test.maxRetakes;
+
+      if (totalUsed >= attemptLimit && reservedAttempts === 0) {
+        throw createError('Maximum retakes exceeded', 403);
+      }
+
+      let session = await TestSession.findOne({
+        studentId,
+        testId,
+        status: 'not_started'
+      }).sort({ createdAt: -1 });
+
+      if (!session) {
+        session = await TestSession.findOne({
           studentId,
           testId,
-          studentBatches,
-          testAssignedDays: test.assignedDays,
-          testAssignedBatches: test.assignedBatches
+          status: 'in_progress'
         });
-        throw createError('No batch assignment found for this test', 400);
       }
 
-      // Check for existing active session
-      const existingSession = await TestSession.findOne({
-        studentId,
-        testId,
-        status: { $in: ['not_started', 'in_progress'] }
-      });
+      if (session && session.status === 'not_started') {
+        session.status = 'in_progress';
+        session.timeStarted = new Date();
+        session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        await session.save();
+      } else if (session && session.status === 'in_progress') {
+        session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        await session.save();
+      } else {
+        if (totalUsed >= attemptLimit) {
+          throw createError('Maximum retakes exceeded', 403);
+        }
 
-      if (existingSession) {
-        // Update existing session
-        existingSession.status = 'in_progress';
-        existingSession.timeStarted = new Date();
-        existingSession.timeExpires = new Date(Date.now() + test.duration * 1000);
-        await existingSession.save();
+        const batchIdStr = determineTestBatchId(studentBatchIds, test);
+        if (!batchIdStr) {
+          throw createError('No batch assignment found for this test', 400);
+        }
 
-        return {
-          sessionId: existingSession.sessionId,
-          test: {
-            id: test._id,
-            title: test.title,
-            duration: test.duration,
-            settings: test.settings
-          },
-          attemptNumber: existingSession.currentAttempt,
-          timeExpires: existingSession.timeExpires
-        };
+        session = await TestSession.create({
+          studentId,
+          batchId: new mongoose.Types.ObjectId(batchIdStr),
+          testId,
+          sessionId: uuidv4(),
+          currentAttempt: totalUsed + 1,
+          totalAttempts: 0,
+          status: 'in_progress',
+          timeStarted: new Date(),
+          timeExpires: new Date(Date.now() + test.duration * 1000)
+        });
+
+        logger.info('Test session started', {
+          studentId,
+          testId,
+          sessionId: session.sessionId,
+          attemptNumber: session.currentAttempt
+        });
       }
 
-      // Create new session
-      const sessionId = uuidv4();
-      const timeExpires = new Date(Date.now() + test.duration * 1000);
+      const contentDoc = test.currentContent
+        ? (test.currentContent.referenceText ? test.currentContent : await TestContent.findById(test.currentContent))
+        : null;
 
-      const session = await TestSession.create({
-        studentId,
-        batchId: testBatch,
-        testId,
-        sessionId,
-        currentAttempt: 1,
-        totalAttempts: 0,
-        status: 'in_progress',
-        timeStarted: new Date(),
-        timeExpires
-      });
+      const content = contentDoc
+        ? {
+            version: contentDoc.version,
+            referenceText: contentDoc.referenceText || '',
+            audio: contentDoc.audio?.url || null,
+            audioMeta: contentDoc.audio
+              ? {
+                  url: contentDoc.audio.url,
+                  duration: contentDoc.audio.duration,
+                  format: contentDoc.audio.format,
+                  size: contentDoc.audio.size
+                }
+              : null
+          }
+        : {
+            referenceText: test.referenceText || '',
+            audio: test.audioURL || null,
+            audioMeta: null
+          };
 
-      logger.info('Test session started', {
-        studentId,
-        testId,
-        sessionId,
-        attemptNumber: 1
-      });
+      const usageAfter = await getAttemptUsage(studentId, testId);
+      const remainingAttempts = Math.max(0, test.maxRetakes - usageAfter.totalUsed);
 
       return {
         sessionId: session.sessionId,
@@ -594,7 +704,9 @@ const studentService = {
           duration: test.duration,
           settings: test.settings
         },
-        attemptNumber: 1,
+        content,
+        attemptNumber: session.currentAttempt || 1,
+        remainingAttempts,
         timeExpires: session.timeExpires
       };
     } catch (error) {

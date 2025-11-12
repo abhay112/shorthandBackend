@@ -80,13 +80,14 @@ export const getUpcomingTests = asyncHandler(async (req, res) => {
 export const checkTestAccess = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { testId } = req.params;
-  
-  const accessCheck = await studentService.canStudentTakeTest(studentId, testId);
-  
+
+  const accessCheck = await studentService.canStudentTakeTest(studentId, testId, { consumeAttempt: true });
+
   return sendResponse(res, 200, true, 'Test access checked successfully', { accessCheck }, {
     studentId: studentId,
     testId: testId,
     canTake: accessCheck.canTake,
+    attemptNumber: accessCheck.attemptNumber,
     ip: req.ip
   });
 });
