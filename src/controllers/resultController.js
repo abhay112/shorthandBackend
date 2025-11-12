@@ -2,6 +2,7 @@ import resultService from '../services/resultService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
+import { validateObjectId } from '../utils/validation.js';
 
 export const submitResult = asyncHandler(async (req, res) => {
   const payload = req.body.results || req.body;
@@ -85,5 +86,21 @@ export const getAllResults = asyncHandler(async (req, res) => {
     'Results retrieved successfully',
     result,
     { adminId: req.user?.id }
+  );
+});
+
+export const getResultById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  validateObjectId(id, 'result ID');
+
+  const result = await resultService.getResultById(id);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Result retrieved successfully',
+    { result },
+    { adminId: req.user?.id, resultId: id }
   );
 });

@@ -1,4 +1,5 @@
 import Result from '../models/Result.js';
+import TestSession from '../models/TestSession.js';
 import { AppError } from '../utils/AppError.js';
 import { processResultSideEffects } from './utils/resultUtils.js';
 
@@ -92,6 +93,25 @@ const resultService = {
         itemsPerPage: limit
       }
     };
+  },
+
+  getResultById: async (resultId) => {
+    const result = await Result.findById(resultId)
+      .populate('studentId', 'name email phoneNumber rollNumber')
+      .populate('testId', 'title category difficulty duration maxRetakes')
+      .populate('batchId', 'name description');
+
+    if (!result) {
+      throw new AppError('Result not found', 404);
+    }
+
+    const session = await TestSession.findOne({ sessionId: result.sessionId })
+      .select('sessionId currentAttempt totalAttempts status timeStarted timeCompleted timeExpires maxRetakes results');
+
+    const detailedResult = result.toObject({ virtuals: true });
+    detailedResult.sessionDetails = session ? session.toObject({ virtuals: true }) : null;
+
+    return detailedResult;
   }
 };
 

@@ -631,6 +631,10 @@ const studentService = {
         });
       }
 
+      if (session) {
+        session.maxRetakes = test.maxRetakes;
+      }
+
       if (session && session.status === 'not_started') {
         session.status = 'in_progress';
         session.timeStarted = new Date();
@@ -656,6 +660,7 @@ const studentService = {
           sessionId: uuidv4(),
           currentAttempt: totalUsed + 1,
           totalAttempts: 0,
+          maxRetakes: test.maxRetakes,
           status: 'in_progress',
           timeStarted: new Date(),
           timeExpires: new Date(Date.now() + test.duration * 1000)

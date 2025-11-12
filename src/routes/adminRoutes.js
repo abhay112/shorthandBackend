@@ -5,7 +5,7 @@ import {
   getDashboardStats,
   updateStudent
 } from '../controllers/adminController.js';
-import { getAllResults } from '../controllers/resultController.js';
+import { getAllResults, getResultById } from '../controllers/resultController.js';
 import { getAllRankings } from '../controllers/rankingController.js';
 import { authenticateFirebase, requireAdmin } from '../middlewares/firebaseAuth.js';
 
@@ -29,6 +29,7 @@ router.delete('/students/:id/batches', (req, res, next) => {
 // Dashboard route
 router.get('/dashboard', getDashboardStats);
 
+router.get('/results/:id', getResultById);
 router.get('/results', getAllResults);
 router.get('/rankings', getAllRankings);
 

@@ -30,13 +30,29 @@ const testSessionSchema = new mongoose.Schema({
     type: Number, 
     default: 1,
     min: 1,
-    max: 3 
+    validate: {
+      validator: function (value) {
+        if (this.maxRetakes === undefined || this.maxRetakes === null) {
+          return true;
+        }
+        return value <= this.maxRetakes;
+      },
+      message: 'Current attempt exceeds allowed maximum'
+    }
   },
   totalAttempts: { 
     type: Number, 
     default: 0,
     min: 0,
-    max: 3 
+    validate: {
+      validator: function (value) {
+        if (this.maxRetakes === undefined || this.maxRetakes === null) {
+          return true;
+        }
+        return value <= this.maxRetakes;
+      },
+      message: 'Total attempts exceeds allowed maximum'
+    }
   },
   
   // Session status
