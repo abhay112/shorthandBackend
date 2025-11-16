@@ -19,8 +19,8 @@ export const {
 export const dbConnection = {
   url: process.env.MONGO_URI || `mongodb://${DB_HOST}:${DB_PORT}/${DB_DATABASE}`,
   options: {
-    connectTimeoutMS: 5000,
-    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 30000,
+    serverSelectionTimeoutMS: 30000,
     maxPoolSize: 10,
     minPoolSize: 5,
   },

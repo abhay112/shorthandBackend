@@ -1,6 +1,8 @@
 import winston from 'winston';
+import LokiTransport from 'winston-loki';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,10 +35,15 @@ const level = () => {
   return isDevelopment ? 'debug' : 'warn';
 };
 
+// Ensure logs directory exists for file transports
+const logsDir = path.join(__dirname, '../../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
 // Define different formats for different transports
 const format = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-  winston.format.colorize({ all: true }),
   winston.format.printf(
     (info) => `${info.timestamp} ${info.level}: ${info.message}`,
   ),
@@ -47,9 +54,12 @@ const transports = [
   // Console transport
   new winston.transports.Console({
     format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
+      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
+      winston.format.colorize({ all: true }),
+      winston.format.printf(
+        (info) => `${info.timestamp} ${info.level}: ${info.message}`,
+      ),
+    ),
   }),
   
   // File transport for errors
@@ -72,6 +82,27 @@ const transports = [
   }),
 ];
 
+if ((process.env.ENABLE_LOKI_LOGS ?? 'true') !== 'false') {
+  const lokiHost = process.env.LOKI_URL || 'http://loki:3100';
+
+  transports.push(new LokiTransport({
+    host: lokiHost,
+    labels: {
+      service: 'shorthnd-backend',
+      environment: process.env.NODE_ENV || 'development',
+    },
+    json: true,
+    replaceTimestamp: true,
+    interval: 5,
+    format: winston.format.json(),
+    onConnectionError: (err) => {
+      if (process.env.NODE_ENV !== 'test') {
+        console.error('Loki transport error:', err.message);
+      }
+    },
+  }));
+}
+
 // Create the logger
 const logger = winston.createLogger({
   level: level(),
@@ -79,12 +110,5 @@ const logger = winston.createLogger({
   format,
   transports,
 });
-
-// Create logs directory if it doesn't exist
-import fs from 'fs';
-const logsDir = path.join(__dirname, '../../logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
 
 export default logger;
