@@ -1,6 +1,9 @@
 import Test from '../models/Test.js';
 import Batch from '../models/Batch.js';
 import TestContent from '../models/TestContent.js';
+import Result from '../models/Result.js';
+import Student from '../models/Student.js';
+import StudentRanking from '../models/StudentRanking.js';
 import { AppError } from '../utils/AppError.js';
 
 const testService = {
@@ -574,6 +577,278 @@ const testService = {
       .populate('assignedDays.batchId', 'name');
 
     return updatedTest;
+  },
+
+  // Get batch-test statistics (attempts, completions, student list)
+  getBatchTestStatistics: async (testId, batchId) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    const batch = await Batch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Batch not found', 404);
+    }
+
+    // Get all students in the batch
+    const studentsInBatch = await Student.find({ 
+      assignedBatches: batchId 
+    }).select('_id name email');
+
+    const studentIds = studentsInBatch.map(s => s._id);
+
+    // Get all results for this test and batch
+    const allResults = await Result.find({
+      testId,
+      batchId,
+      studentId: { $in: studentIds }
+    }).populate('studentId', 'name email').sort({ submittedAt: -1 });
+
+    // Get completed results
+    const completedResults = allResults.filter(r => r.status === 'completed');
+
+    // Get unique students who attempted
+    const attemptedStudentIds = [...new Set(allResults.map(r => r.studentId._id.toString()))];
+    const attemptedStudents = studentsInBatch.filter(s => 
+      attemptedStudentIds.includes(s._id.toString())
+    );
+
+    // Get unique students who completed
+    const completedStudentIds = [...new Set(completedResults.map(r => r.studentId._id.toString()))];
+    const completedStudents = studentsInBatch.filter(s => 
+      completedStudentIds.includes(s._id.toString())
+    );
+
+    // Get students who haven't attempted
+    const notAttemptedStudents = studentsInBatch.filter(s => 
+      !attemptedStudentIds.includes(s._id.toString())
+    );
+
+    // Check if test is closed for this batch
+    const isClosed = test.isClosedForBatch(batchId);
+
+    // Check if rankings are generated
+    const rankingsGenerated = test.areRankingsGeneratedForBatch(batchId);
+
+    return {
+      test: {
+        _id: test._id,
+        title: test.title,
+        testType: test.testType,
+        difficulty: test.difficulty
+      },
+      batch: {
+        _id: batch._id,
+        name: batch.name
+      },
+      statistics: {
+        totalStudents: studentsInBatch.length,
+        attemptedCount: attemptedStudents.length,
+        completedCount: completedStudents.length,
+        notAttemptedCount: notAttemptedStudents.length,
+        totalAttempts: allResults.length,
+        totalCompletedAttempts: completedResults.length
+      },
+      attemptedStudents: attemptedStudents.map(s => ({
+        _id: s._id,
+        name: s.name,
+        email: s.email,
+        attempts: allResults.filter(r => r.studentId._id.toString() === s._id.toString()).length,
+        completedAttempts: completedResults.filter(r => r.studentId._id.toString() === s._id.toString()).length
+      })),
+      completedStudents: completedStudents.map(s => ({
+        _id: s._id,
+        name: s.name,
+        email: s.email,
+        bestResult: completedResults
+          .filter(r => r.studentId._id.toString() === s._id.toString())
+          .sort((a, b) => (b.wpm * b.accuracy) - (a.wpm * a.accuracy))[0] || null
+      })),
+      notAttemptedStudents: notAttemptedStudents.map(s => ({
+        _id: s._id,
+        name: s.name,
+        email: s.email
+      })),
+      isClosed,
+      rankingsGenerated
+    };
+  },
+
+  // Close test for a specific batch
+  closeTestForBatch: async (testId, batchId, adminId, reason = '') => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    const batch = await Batch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Batch not found', 404);
+    }
+
+    // Check if already closed
+    if (test.isClosedForBatch(batchId)) {
+      throw new AppError('Test is already closed for this batch', 400);
+    }
+
+    // Add to closedForBatches array
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      {
+        $push: {
+          closedForBatches: {
+            batchId,
+            closedBy: adminId,
+            closedAt: new Date(),
+            reason
+          }
+        }
+      },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('closedForBatches.closedBy', 'name email')
+      .populate('closedForBatches.batchId', 'name');
+
+    return updatedTest;
+  },
+
+  // Open (re-open) test for a specific batch
+  openTestForBatch: async (testId, batchId) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    const batch = await Batch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Batch not found', 404);
+    }
+
+    // Check if already open
+    if (!test.isClosedForBatch(batchId)) {
+      throw new AppError('Test is not closed for this batch', 400);
+    }
+
+    // Remove from closedForBatches array
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      {
+        $pull: {
+          closedForBatches: { batchId }
+        }
+      },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('closedForBatches.closedBy', 'name email')
+      .populate('closedForBatches.batchId', 'name');
+
+    return updatedTest;
+  },
+
+  // Generate rankings for a batch-test combination
+  generateRankingsForBatchTest: async (testId, batchId, adminId) => {
+    const test = await Test.findById(testId);
+    if (!test) {
+      throw new AppError('Test not found', 404);
+    }
+
+    const batch = await Batch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Batch not found', 404);
+    }
+
+    // Check if rankings already generated
+    if (test.areRankingsGeneratedForBatch(batchId)) {
+      throw new AppError('Rankings are already generated for this batch-test combination', 400);
+    }
+
+    // Get all completed results for this batch-test
+    const results = await Result.find({
+      testId,
+      batchId,
+      status: 'completed',
+      isValid: true
+    }).sort({ wpm: -1, accuracy: -1, speed: -1 });
+
+    if (results.length === 0) {
+      throw new AppError('No completed results found for this batch-test combination', 400);
+    }
+
+    const totalStudents = results.length;
+
+    // Calculate rankings for each student
+    const rankingPromises = results.map(async (result, index) => {
+      const rank = index + 1;
+      const percentile = Math.round(((totalStudents - rank + 1) / totalStudents) * 100);
+
+      // Get previous ranking if exists
+      const previousRanking = await StudentRanking.findOne({
+        studentId: result.studentId,
+        batchId,
+        testId
+      });
+
+      const previousRank = previousRanking ? previousRanking.rank : null;
+      const rankChange = previousRank ? previousRank - rank : 0;
+
+      // Update or create StudentRanking
+      await StudentRanking.findOneAndUpdate(
+        { studentId: result.studentId, batchId, testId },
+        {
+          studentId: result.studentId,
+          batchId,
+          testId,
+          rank,
+          percentile,
+          wpm: result.wpm,
+          accuracy: result.accuracy,
+          speed: result.speed,
+          totalStudents,
+          totalAttempts: totalStudents,
+          previousRank,
+          rankChange,
+          testDate: result.submittedAt,
+          rankingCalculatedAt: new Date()
+        },
+        { upsert: true, new: true }
+      );
+
+      // Update result with rank and percentile
+      result.rank = rank;
+      result.percentile = percentile;
+      await result.save();
+
+      return { studentId: result.studentId, rank, percentile };
+    });
+
+    await Promise.all(rankingPromises);
+
+    // Mark rankings as generated in test document
+    const updatedTest = await Test.findByIdAndUpdate(
+      testId,
+      {
+        $push: {
+          rankingsGenerated: {
+            batchId,
+            generatedBy: adminId,
+            generatedAt: new Date()
+          }
+        }
+      },
+      { new: true }
+    )
+      .populate('uploadedBy', 'name email')
+      .populate('rankingsGenerated.generatedBy', 'name email')
+      .populate('rankingsGenerated.batchId', 'name');
+
+    return {
+      test: updatedTest,
+      rankingsGenerated: totalStudents,
+      message: `Rankings generated successfully for ${totalStudents} students`
+    };
   }
 };
 

@@ -209,6 +209,46 @@ const testSchema = new mongoose.Schema({
   availableFrom: Date,
   availableUntil: Date,
   
+  // Batch-specific test closure tracking
+  closedForBatches: [{
+    batchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Batch',
+      required: true
+    },
+    closedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      required: true
+    },
+    closedAt: {
+      type: Date,
+      default: Date.now
+    },
+    reason: {
+      type: String,
+      trim: true
+    }
+  }],
+  
+  // Batch-specific ranking generation tracking
+  rankingsGenerated: [{
+    batchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Batch',
+      required: true
+    },
+    generatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      required: true
+    },
+    generatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  
   createdAt: { 
     type: Date, 
     default: Date.now 
@@ -237,6 +277,8 @@ testSchema.index({ availableFrom: 1, availableUntil: 1 });
 testSchema.index({ createdAt: -1 });
 testSchema.index({ currentContent: 1 });
 testSchema.index({ draftContent: 1 });
+testSchema.index({ 'closedForBatches.batchId': 1 });
+testSchema.index({ 'rankingsGenerated.batchId': 1 });
 
 // Virtual for checking if test is currently available
 testSchema.virtual('isCurrentlyAvailable').get(function() {
@@ -264,6 +306,22 @@ testSchema.virtual('status').get(function() {
   return 'available';
 });
 
+// Method to check if test is closed for a specific batch
+testSchema.methods.isClosedForBatch = function(batchId) {
+  if (!batchId) return false;
+  return this.closedForBatches.some(
+    closed => closed.batchId.toString() === batchId.toString()
+  );
+};
+
+// Method to check if rankings are generated for a specific batch
+testSchema.methods.areRankingsGeneratedForBatch = function(batchId) {
+  if (!batchId) return false;
+  return this.rankingsGenerated.some(
+    ranking => ranking.batchId.toString() === batchId.toString()
+  );
+};
+
 // Method to check if test is available for a specific date
 testSchema.methods.isAvailableOnDate = function(date, batchId) {
   const targetDate = new Date(date);
@@ -272,6 +330,9 @@ testSchema.methods.isAvailableOnDate = function(date, batchId) {
 
   // Check if test is generally available
   if (!this.isCurrentlyAvailable) return false;
+  
+  // Check if test is closed for this batch
+  if (batchId && this.isClosedForBatch(batchId)) return false;
 
   // Check day-specific assignments
   const dayAssignment = this.assignedDays.find(ad => {

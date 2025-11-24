@@ -521,6 +521,12 @@ const studentService = {
 
       const studentBatchIds = (student.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
 
+      // Check if test is closed for any of the student's batches
+      const isClosedForStudentBatch = studentBatchIds.some(batchId => test.isClosedForBatch(batchId));
+      if (isClosedForStudentBatch) {
+        return { canTake: false, reason: 'Test is closed for your batch. Time\'s up!' };
+      }
+
       const dayBasedBatches = (test.assignedDays || []).map(day => toIdString(day.batchId)).filter(Boolean);
       const generalBatches = (test.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
 
@@ -912,17 +918,28 @@ const studentService = {
       const query = { studentId };
       if (batchId) query.batchId = batchId;
 
-      const rankings = await StudentRanking.find(query)
+      const allRankings = await StudentRanking.find(query)
         .populate('testId', 'title difficulty category')
         .populate('batchId', 'name')
-        .sort({ testDate: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit);
+        .sort({ testDate: -1 });
 
-      const total = await StudentRanking.countDocuments(query);
+      // Filter rankings to only include those where rankings are generated for the batch-test
+      const validRankings = [];
+      for (const ranking of allRankings) {
+        if (ranking.testId && ranking.batchId) {
+          const test = await Test.findById(ranking.testId);
+          if (test && test.areRankingsGeneratedForBatch(ranking.batchId._id || ranking.batchId)) {
+            validRankings.push(ranking);
+          }
+        }
+      }
+
+      // Apply pagination
+      const total = validRankings.length;
+      const paginatedRankings = validRankings.slice((page - 1) * limit, page * limit);
 
       return {
-        rankings,
+        rankings: paginatedRankings,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -940,7 +957,33 @@ const studentService = {
   getBatchLeaderboard: async (batchId, testId = null) => {
     try {
       const query = { batchId };
-      if (testId) query.testId = testId;
+      if (testId) {
+        query.testId = testId;
+        
+        // Check if rankings are generated for this batch-test combination
+        const test = await Test.findById(testId);
+        if (!test || !test.areRankingsGeneratedForBatch(batchId)) {
+          return [];
+        }
+      } else {
+        // For batch-only queries, filter by tests that have rankings generated
+        const allRankings = await StudentRanking.find(query)
+          .populate('studentId', 'name email')
+          .populate('testId', 'title')
+          .sort({ rank: 1 })
+          .limit(50);
+
+        const validRankings = [];
+        for (const ranking of allRankings) {
+          if (ranking.testId) {
+            const test = await Test.findById(ranking.testId);
+            if (test && test.areRankingsGeneratedForBatch(batchId)) {
+              validRankings.push(ranking);
+            }
+          }
+        }
+        return validRankings;
+      }
 
       const rankings = await StudentRanking.find(query)
         .populate('studentId', 'name email')

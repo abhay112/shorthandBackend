@@ -437,3 +437,80 @@ export const removeTestFromDates = asyncHandler(async (req, res) => {
     { adminId: req.user.id, testId: id }
   );
 });
+
+// Get batch-test statistics
+export const getBatchTestStatistics = asyncHandler(async (req, res) => {
+  const { testId, batchId } = req.params;
+
+  validateObjectId(testId, 'test ID');
+  validateObjectId(batchId, 'batch ID');
+
+  const statistics = await testService.getBatchTestStatistics(testId, batchId);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Batch-test statistics retrieved successfully',
+    statistics,
+    { adminId: req.user.id, testId, batchId }
+  );
+});
+
+// Close test for a batch
+export const closeTestForBatch = asyncHandler(async (req, res) => {
+  const { testId, batchId } = req.params;
+  const { reason } = req.body;
+
+  validateObjectId(testId, 'test ID');
+  validateObjectId(batchId, 'batch ID');
+
+  const test = await testService.closeTestForBatch(testId, batchId, req.user.id, reason || '');
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Test closed for batch successfully',
+    { test },
+    { adminId: req.user.id, testId, batchId }
+  );
+});
+
+// Open (re-open) test for a batch
+export const openTestForBatch = asyncHandler(async (req, res) => {
+  const { testId, batchId } = req.params;
+
+  validateObjectId(testId, 'test ID');
+  validateObjectId(batchId, 'batch ID');
+
+  const test = await testService.openTestForBatch(testId, batchId);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Test opened for batch successfully',
+    { test },
+    { adminId: req.user.id, testId, batchId }
+  );
+});
+
+// Generate rankings for batch-test
+export const generateRankingsForBatchTest = asyncHandler(async (req, res) => {
+  const { testId, batchId } = req.params;
+
+  validateObjectId(testId, 'test ID');
+  validateObjectId(batchId, 'batch ID');
+
+  const result = await testService.generateRankingsForBatchTest(testId, batchId, req.user.id);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    result.message,
+    result,
+    { adminId: req.user.id, testId, batchId }
+  );
+});

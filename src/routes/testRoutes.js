@@ -11,7 +11,11 @@ import {
   blockTest,
   unblockTest,
   assignTestToDates,
-  removeTestFromDates
+  removeTestFromDates,
+  getBatchTestStatistics,
+  closeTestForBatch,
+  openTestForBatch,
+  generateRankingsForBatchTest
 } from '../controllers/testController.js';
 import { authenticateFirebase } from '../middlewares/firebaseAuth.js';
 import { requireAdmin } from '../middlewares/authMiddleware.js';
@@ -42,5 +46,11 @@ router.delete('/:id/remove-dates', removeTestFromDates);
 // Block/Unblock operations
 router.post('/:id/block', blockTest);
 router.post('/:id/unblock', unblockTest);
+
+// Batch-test management operations
+router.get('/:testId/batch/:batchId/statistics', getBatchTestStatistics);
+router.post('/:testId/batch/:batchId/close', closeTestForBatch);
+router.post('/:testId/batch/:batchId/open', openTestForBatch);
+router.post('/:testId/batch/:batchId/generate-ranks', generateRankingsForBatchTest);
 
 export default router;
