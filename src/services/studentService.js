@@ -76,6 +76,7 @@ const reserveTestAttempt = async ({ studentId, studentBatchIds, test, attemptNum
     sessionId: uuidv4(),
     currentAttempt: attemptNumber,
     totalAttempts: 0,
+    maxRetakes: test.maxRetakes || 3, // Set maxRetakes to prevent validation error
     status: 'not_started',
     timeStarted: null,
     timeCompleted: null,
@@ -127,7 +128,20 @@ const studentService = {
         throw createError('Student not found', 404);
       }
 
-      return student;
+      // Get statistics
+      const stats = await studentService.getStudentStatistics(studentId);
+      
+      // Format student data with statistics
+      const studentData = student.toObject ? student.toObject() : student;
+      return {
+        ...studentData,
+        id: studentData._id,
+        approved: studentData.isApproved,
+        blocked: studentData.isBlocked,
+        active: !studentData.isBlocked && studentData.isApproved,
+        memberSince: studentData.createdAt ? new Date(studentData.createdAt).toISOString().split('T')[0] : null,
+        statistics: stats
+      };
     } catch (error) {
       logger.error('Error fetching student profile', { error: error.message, studentId });
       throw error;
@@ -404,6 +418,16 @@ const studentService = {
         // Check if test content can be viewed (even if blocked)
         const canViewContent = !test.isBlocked || test.allowViewWhenBlocked;
 
+        // Determine test status
+        let testStatus = 'available';
+        if (test.isBlocked) {
+          testStatus = 'blocked';
+        } else if (hasCompleted && completedToday) {
+          testStatus = 'completed';
+        } else if (hasCompleted) {
+          testStatus = 'completed';
+        }
+
         testsWithMetadata.push({
           test: {
             id: test._id,
@@ -417,7 +441,7 @@ const studentService = {
             settings: test.settings,
             isBlocked: test.isBlocked,
             blockReason: test.blockReason,
-            status: test.isBlocked ? 'blocked' : 'available'
+            status: testStatus
           },
           canTakeTest: accessCheck.canTake && !test.isBlocked,
           canViewContent,
@@ -547,12 +571,29 @@ const studentService = {
       const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
       const remainingAttempts = test.maxRetakes - totalUsed;
 
+      // Check if test has been completed today
+      const { start: todayStart, end: todayEnd } = studentService.getUtcDayRange();
+      const completedToday = await Result.findOne({
+        studentId,
+        testId,
+        status: 'completed',
+        submittedAt: {
+          $gte: todayStart,
+          $lt: todayEnd
+        }
+      }).lean();
+
       if (consumeAttempt) {
         if (remainingAttempts <= 0) {
+          // Check if there are any completed attempts
+          if (completedAttempts > 0) {
+            return { canTake: false, reason: 'You have already completed this test' };
+          }
           return { canTake: false, reason: 'Maximum retakes exceeded' };
         }
 
         const attemptNumber = totalUsed + 1;
+        
         const reservation = await reserveTestAttempt({
           studentId,
           studentBatchIds,
@@ -576,6 +617,10 @@ const studentService = {
             reservedAttempts,
             nextAttemptNumber: totalUsed
           };
+        }
+        // Check if test has been completed
+        if (completedAttempts > 0) {
+          return { canTake: false, reason: 'You have already completed this test' };
         }
         return { canTake: false, reason: 'Maximum retakes exceeded' };
       }
@@ -996,7 +1041,839 @@ const studentService = {
       logger.error('Error fetching batch leaderboard', { error: error.message, batchId, testId });
       throw error;
     }
+  },
+
+  // Profile API Methods
+  getWpmTrend: async (studentId, options = {}) => {
+    try {
+      const { days = 30, period } = options;
+      let startDate = new Date();
+      
+      if (period === 'week') {
+        startDate.setDate(startDate.getDate() - 7);
+      } else if (period === 'month') {
+        startDate.setDate(startDate.getDate() - 30);
+      } else if (period === 'year') {
+        startDate.setDate(startDate.getDate() - 365);
+      } else {
+        startDate.setDate(startDate.getDate() - days);
+      }
+
+      const results = await Result.find({
+        studentId,
+        status: 'completed',
+        submittedAt: { $gte: startDate }
+      })
+        .sort({ submittedAt: 1 })
+        .select('wpm submittedAt')
+        .lean();
+
+      // Group by day and calculate average WPM per day
+      const wpmByDay = {};
+      results.forEach(result => {
+        const day = new Date(result.submittedAt).toISOString().split('T')[0];
+        if (!wpmByDay[day]) {
+          wpmByDay[day] = { wpm: [], date: day };
+        }
+        wpmByDay[day].wpm.push(result.wpm);
+      });
+
+      const wpmTrend = Object.keys(wpmByDay)
+        .sort()
+        .map((day, index) => ({
+          day: index + 1,
+          wpm: Math.round(wpmByDay[day].wpm.reduce((a, b) => a + b, 0) / wpmByDay[day].wpm.length),
+          date: new Date(day).toISOString()
+        }));
+
+      return wpmTrend;
+    } catch (error) {
+      logger.error('Error fetching WPM trend', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getBestPerformance: async (studentId) => {
+    try {
+      const results = await Result.find({ studentId, status: 'completed' })
+        .populate('testId', 'title')
+        .sort({ submittedAt: -1 })
+        .lean();
+
+      if (results.length === 0) {
+        return {
+          bestWpm: 0,
+          bestAccuracy: 0,
+          bestRank: null,
+          testsToday: 0,
+          bestWpmDate: null,
+          bestAccuracyDate: null,
+          bestRankDate: null,
+          bestRankTest: null
+        };
+      }
+
+      // Get today's test count
+      const { start: todayStart, end: todayEnd } = studentService.getUtcDayRange();
+      const testsToday = results.filter(r => {
+        const submitted = new Date(r.submittedAt);
+        return submitted >= todayStart && submitted < todayEnd;
+      }).length;
+
+      // Find best WPM
+      const bestWpmResult = results.reduce((best, current) => 
+        current.wpm > best.wpm ? current : best
+      );
+
+      // Find best accuracy
+      const bestAccuracyResult = results.reduce((best, current) => 
+        current.accuracy > best.accuracy ? current : best
+      );
+
+      // Find best rank
+      const rankedResults = results.filter(r => r.rank !== null && r.rank !== undefined);
+      const bestRankResult = rankedResults.length > 0 
+        ? rankedResults.reduce((best, current) => 
+            (current.rank < best.rank || best.rank === null) ? current : best
+          )
+        : null;
+
+      return {
+        bestWpm: bestWpmResult.wpm,
+        bestAccuracy: bestAccuracyResult.accuracy,
+        bestRank: bestRankResult ? bestRankResult.rank : null,
+        testsToday,
+        bestWpmDate: bestWpmResult.submittedAt,
+        bestAccuracyDate: bestAccuracyResult.submittedAt,
+        bestRankDate: bestRankResult ? bestRankResult.submittedAt : null,
+        bestRankTest: bestRankResult && bestRankResult.testId ? {
+          id: bestRankResult.testId._id || bestRankResult.testId,
+          title: bestRankResult.testId.title
+        } : null
+      };
+    } catch (error) {
+      logger.error('Error fetching best performance', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getRecentActivity: async (studentId, options = {}) => {
+    try {
+      const { limit = 4 } = options;
+      
+      // Get recent results (test completions)
+      const recentResults = await Result.find({ studentId, status: 'completed' })
+        .populate('testId', 'title')
+        .sort({ submittedAt: -1 })
+        .limit(limit)
+        .lean();
+
+      // Get recent test sessions (test started)
+      const recentSessions = await TestSession.find({ studentId })
+        .populate('testId', 'title')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+      // Get audit logs for this student
+      const AuditLog = (await import('../models/AuditLog.js')).default;
+      const auditLogs = await AuditLog.find({
+        entityType: 'Student',
+        entityId: studentId
+      })
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .lean();
+
+      const activities = [];
+
+      // Process results
+      recentResults.forEach((result, index) => {
+        activities.push({
+          id: `result_${result._id}`,
+          type: 'test_completed',
+          text: 'Completed Test',
+          detail: `${result.testId?.title || 'Test'} - ${result.wpm} WPM, ${result.accuracy}% Accuracy`,
+          timestamp: result.submittedAt,
+          time: formatTimeAgo(result.submittedAt),
+          icon: 'CheckCircle',
+          color: 'text-green-500',
+          metadata: {
+            testId: result.testId?._id || result.testId,
+            testTitle: result.testId?.title,
+            wpm: result.wpm,
+            accuracy: result.accuracy,
+            resultId: result._id
+          }
+        });
+      });
+
+      // Process sessions
+      recentSessions.forEach((session) => {
+        if (session.status === 'not_started' || session.status === 'in_progress') {
+          activities.push({
+            id: `session_${session._id}`,
+            type: 'test_started',
+            text: 'Started Test',
+            detail: `${session.testId?.title || 'Test'} - Session started`,
+            timestamp: session.createdAt,
+            time: formatTimeAgo(session.createdAt),
+            icon: 'Activity',
+            color: 'text-blue-500',
+            metadata: {
+              testId: session.testId?._id || session.testId,
+              testTitle: session.testId?.title,
+              sessionId: session.sessionId
+            }
+          });
+        }
+      });
+
+      // Process audit logs
+      auditLogs.forEach((log) => {
+        if (log.action === 'UPDATE' && log.changes?.fieldsChanged?.includes('name')) {
+          activities.push({
+            id: `audit_${log._id}`,
+            type: 'profile_updated',
+            text: 'Profile Updated',
+            detail: 'Updated contact information',
+            timestamp: log.timestamp,
+            time: formatTimeAgo(log.timestamp),
+            icon: 'Edit',
+            color: 'text-purple-500',
+            metadata: {
+              fieldsUpdated: log.changes?.fieldsChanged || []
+            }
+          });
+        } else if (log.action === 'ASSIGN_BATCH') {
+          activities.push({
+            id: `audit_${log._id}`,
+            type: 'batch_assigned',
+            text: 'Assigned to Batch',
+            detail: 'Added to batch',
+            timestamp: log.timestamp,
+            time: formatTimeAgo(log.timestamp),
+            icon: 'FileText',
+            color: 'text-orange-500',
+            metadata: {
+              batchId: log.batchId,
+              batchName: log.changes?.after?.batchName
+            }
+          });
+        } else if (log.action === 'APPROVE') {
+          activities.push({
+            id: `audit_${log._id}`,
+            type: 'account_approved',
+            text: 'Account Approved',
+            detail: 'Student account approved by Admin',
+            timestamp: log.timestamp,
+            time: formatTimeAgo(log.timestamp),
+            icon: 'CheckCircle',
+            color: 'text-green-500',
+            metadata: {
+              approvedBy: log.performedBy
+            }
+          });
+        }
+      });
+
+      // Sort by timestamp and limit
+      activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      return activities.slice(0, limit);
+    } catch (error) {
+      logger.error('Error fetching recent activity', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getAssignedBatchesWithDetails: async (studentId) => {
+    try {
+      const student = await Student.findById(studentId)
+        .populate({
+          path: 'assignedBatches',
+          populate: {
+            path: 'tests',
+            select: 'title'
+          }
+        })
+        .lean();
+
+      if (!student || !student.assignedBatches) {
+        return [];
+      }
+
+      const batches = await Promise.all(
+        student.assignedBatches.map(async (batch) => {
+          // Get student count
+          const studentCount = await Student.countDocuments({ assignedBatches: batch._id });
+          
+          // Get test count
+          const testCount = await Test.countDocuments({
+            $or: [
+              { assignedBatches: batch._id },
+              { 'assignedDays.batchId': batch._id }
+            ]
+          });
+
+          // Get recent test results for this batch
+          const recentResults = await Result.find({
+            studentId,
+            batchId: batch._id,
+            status: 'completed'
+          })
+            .populate('testId', 'title')
+            .sort({ submittedAt: -1 })
+            .limit(2)
+            .lean();
+
+          // Calculate progress (percentage of tests completed)
+          const totalTests = testCount;
+          const completedTests = await Result.countDocuments({
+            studentId,
+            batchId: batch._id,
+            status: 'completed'
+          });
+          const progress = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
+
+          return {
+            id: batch._id,
+            _id: batch._id,
+            name: batch.name,
+            description: batch.description,
+            status: batch.isActive ? 'active' : 'inactive',
+            duration: batch.startDate && batch.endDate
+              ? `${Math.ceil((new Date(batch.endDate) - new Date(batch.startDate)) / (1000 * 60 * 60 * 24 * 30))} months`
+              : 'N/A',
+            students: `${studentCount} students`,
+            studentCount,
+            tests: testCount,
+            testCount,
+            progress,
+            assignedAt: student.createdAt,
+            recentTests: recentResults.map(r => ({
+              testId: r.testId?._id || r.testId,
+              testTitle: r.testId?.title,
+              wpm: r.wpm,
+              accuracy: r.accuracy,
+              rank: r.rank,
+              completedAt: r.submittedAt
+            }))
+          };
+        })
+      );
+
+      return batches;
+    } catch (error) {
+      logger.error('Error fetching assigned batches with details', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getTestHistory: async (studentId, options = {}) => {
+    try {
+      const {
+        page = 1,
+        limit = 20,
+        search,
+        status,
+        batchId,
+        sortBy = 'date',
+        sortOrder = 'desc'
+      } = options;
+
+      const query = { studentId, status: 'completed' };
+      
+      if (batchId) {
+        query.batchId = batchId;
+      }
+
+      if (search) {
+        const testIds = await Test.find({
+          title: { $regex: search, $options: 'i' }
+        }).select('_id').lean();
+        query.testId = { $in: testIds.map(t => t._id) };
+      }
+
+      if (status) {
+        query.status = status;
+      }
+
+      const sortOptions = {};
+      if (sortBy === 'date') {
+        sortOptions.submittedAt = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'wpm') {
+        sortOptions.wpm = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'accuracy') {
+        sortOptions.accuracy = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'rank') {
+        sortOptions.rank = sortOrder === 'asc' ? 1 : -1;
+      }
+
+      const skip = (page - 1) * limit;
+      const [results, total] = await Promise.all([
+        Result.find(query)
+          .populate('testId', 'title description testType difficulty category duration')
+          .populate('batchId', 'name')
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Result.countDocuments(query)
+      ]);
+
+      // Get total students for each test to calculate percentile
+      const tests = await Promise.all(
+        results.map(async (result) => {
+          // Handle null references (deleted tests or batches)
+          if (!result.testId) {
+            return {
+              id: result._id,
+              _id: result._id,
+              test: {
+                id: null,
+                title: 'Deleted Test',
+                description: null,
+                testType: null,
+                difficulty: null,
+                category: null,
+                duration: null
+              },
+              batch: result.batchId ? {
+                id: result.batchId._id,
+                name: result.batchId.name || 'Unknown Batch'
+              } : {
+                id: null,
+                name: 'Deleted Batch'
+              },
+              status: result.status,
+              completedAt: result.submittedAt,
+              completedAgo: formatTimeAgo(result.submittedAt),
+              wpm: result.wpm,
+              accuracy: result.accuracy,
+              rank: result.rank,
+              totalStudents: 0,
+              percentile: result.percentile,
+              duration: result.timeTaken,
+              attempts: {
+                current: result.attemptNumber,
+                max: 3
+              },
+              resultId: result._id
+            };
+          }
+
+          const totalStudents = await Result.countDocuments({
+            testId: result.testId._id,
+            status: 'completed'
+          });
+
+          return {
+            id: result._id,
+            _id: result._id,
+            test: {
+              id: result.testId._id,
+              title: result.testId.title || 'Unknown Test',
+              description: result.testId.description || null,
+              testType: result.testId.testType || null,
+              difficulty: result.testId.difficulty || null,
+              category: result.testId.category || null,
+              duration: result.testId.duration || null
+            },
+            batch: result.batchId ? {
+              id: result.batchId._id,
+              name: result.batchId.name || 'Unknown Batch'
+            } : {
+              id: result.batchId || null,
+              name: 'Deleted Batch'
+            },
+            status: result.status,
+            completedAt: result.submittedAt,
+            completedAgo: formatTimeAgo(result.submittedAt),
+            wpm: result.wpm,
+            accuracy: result.accuracy,
+            rank: result.rank,
+            totalStudents,
+            percentile: result.percentile,
+            duration: result.timeTaken,
+            attempts: {
+              current: result.attemptNumber,
+              max: 3 // This should come from test settings
+            },
+            resultId: result._id
+          };
+        })
+      );
+
+      return {
+        tests,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching test history', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getPerformanceRankings: async (studentId) => {
+    try {
+      // Get global rankings
+      const allResults = await Result.find({ status: 'completed' })
+        .select('studentId wpm accuracy')
+        .lean();
+
+      const studentResults = allResults.filter(r => r.studentId.toString() === studentId.toString());
+      const allWpm = allResults.map(r => r.wpm).sort((a, b) => b - a);
+      const studentWpm = studentResults.map(r => r.wpm).sort((a, b) => b - a);
+      const bestStudentWpm = studentWpm.length > 0 ? studentWpm[0] : 0;
+
+      let globalRank = null;
+      if (bestStudentWpm > 0) {
+        globalRank = allWpm.findIndex(wpm => wpm <= bestStudentWpm) + 1;
+      }
+
+      const totalStudents = new Set(allResults.map(r => r.studentId.toString())).size;
+      const globalPercentile = globalRank && totalStudents > 0
+        ? Math.round(((totalStudents - globalRank) / totalStudents) * 100 * 10) / 10
+        : 0;
+
+      // Get batch rankings
+      const student = await Student.findById(studentId).populate('assignedBatches').lean();
+      let batchRank = null;
+      let batchPercentile = 0;
+
+      if (student && student.assignedBatches && student.assignedBatches.length > 0) {
+        const batchId = student.assignedBatches[0]._id;
+        const batchResults = await Result.find({
+          batchId,
+          status: 'completed'
+        })
+          .select('studentId wpm')
+          .lean();
+
+        const batchWpm = batchResults.map(r => r.wpm).sort((a, b) => b - a);
+        const batchStudentWpm = batchResults
+          .filter(r => r.studentId.toString() === studentId.toString())
+          .map(r => r.wpm)
+          .sort((a, b) => b - a);
+
+        if (batchStudentWpm.length > 0) {
+          const bestBatchWpm = batchStudentWpm[0];
+          batchRank = batchWpm.findIndex(wpm => wpm <= bestBatchWpm) + 1;
+          const batchTotalStudents = new Set(batchResults.map(r => r.studentId.toString())).size;
+          batchPercentile = batchTotalStudents > 0
+            ? Math.round(((batchTotalStudents - batchRank) / batchTotalStudents) * 100 * 10) / 10
+            : 0;
+        }
+      }
+
+      // Calculate progress (simplified - would need historical data for accurate calculation)
+      const progress = {
+        change: 0,
+        direction: 'stable',
+        period: 'month',
+        previousRank: null
+      };
+
+      return {
+        globalRank: {
+          rank: globalRank,
+          totalStudents,
+          percentile: globalPercentile,
+          topPercent: globalPercentile > 0 ? Math.round(100 - globalPercentile) : 0
+        },
+        batchRank: batchRank ? {
+          rank: batchRank,
+          totalStudents: new Set(
+            (await Result.find({ batchId: student.assignedBatches[0]._id }).select('studentId').lean())
+              .map(r => r.studentId.toString())
+          ).size,
+          percentile: batchPercentile,
+          topPercent: batchPercentile > 0 ? Math.round(100 - batchPercentile) : 0,
+          batchId: student.assignedBatches[0]._id,
+          batchName: student.assignedBatches[0].name
+        } : null,
+        progress
+      };
+    } catch (error) {
+      logger.error('Error fetching performance rankings', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getPerformanceTrends: async (studentId, options = {}) => {
+    try {
+      const { limit = 10 } = options;
+
+      const results = await Result.find({
+        studentId,
+        status: 'completed'
+      })
+        .populate('testId', 'title')
+        .sort({ submittedAt: -1 })
+        .limit(limit)
+        .lean();
+
+      return results.map((result, index) => ({
+        test: `Test ${results.length - index}`,
+        testId: result.testId?._id || result.testId,
+        testTitle: result.testId?.title,
+        wpm: result.wpm,
+        accuracy: result.accuracy,
+        date: result.submittedAt
+      })).reverse();
+    } catch (error) {
+      logger.error('Error fetching performance trends', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getAchievements: async (studentId) => {
+    try {
+      const results = await Result.find({ studentId, status: 'completed' })
+        .populate('testId', 'title')
+        .sort({ submittedAt: -1 })
+        .lean();
+
+      const achievements = [];
+
+      // WPM milestones
+      const wpmMilestones = [30, 40, 50, 60, 70, 80];
+      const bestWpm = Math.max(...results.map(r => r.wpm), 0);
+      const reachedMilestone = wpmMilestones.find(m => bestWpm >= m);
+      if (reachedMilestone) {
+        const milestoneResult = results.find(r => r.wpm >= reachedMilestone);
+        if (milestoneResult) {
+          achievements.push({
+            id: `wpm_${reachedMilestone}`,
+            type: 'wpm_milestone',
+            title: `Reached ${reachedMilestone} WPM milestone`,
+            description: `Achieved ${reachedMilestone} WPM in a test`,
+            icon: 'Award',
+            color: 'text-yellow-500',
+            achievedAt: milestoneResult.submittedAt,
+            timeAgo: formatTimeAgo(milestoneResult.submittedAt),
+            metadata: {
+              wpm: milestoneResult.wpm,
+              testId: milestoneResult.testId?._id || milestoneResult.testId
+            }
+          });
+        }
+      }
+
+      // Test count milestones
+      const testCount = results.length;
+      const testMilestones = [5, 10, 20, 50, 100];
+      const reachedTestMilestone = testMilestones.find(m => testCount >= m);
+      if (reachedTestMilestone) {
+        const milestoneResult = results[testCount - 1];
+        achievements.push({
+          id: `test_${reachedTestMilestone}`,
+          type: 'test_count',
+          title: `Completed ${reachedTestMilestone} tests`,
+          description: `Completed ${reachedTestMilestone} tests successfully`,
+          icon: 'Medal',
+          color: 'text-blue-500',
+          achievedAt: milestoneResult.submittedAt,
+          timeAgo: formatTimeAgo(milestoneResult.submittedAt),
+          metadata: {
+            testCount: reachedTestMilestone
+          }
+        });
+      }
+
+      // Perfect accuracy
+      const perfectResult = results.find(r => r.accuracy === 100);
+      if (perfectResult) {
+        achievements.push({
+          id: 'perfect_accuracy',
+          type: 'perfect_accuracy',
+          title: 'Perfect accuracy (100%) achieved',
+          description: 'Achieved 100% accuracy in a test',
+          icon: 'Target',
+          color: 'text-green-500',
+          achievedAt: perfectResult.submittedAt,
+          timeAgo: formatTimeAgo(perfectResult.submittedAt),
+          metadata: {
+            accuracy: 100,
+            testId: perfectResult.testId?._id || perfectResult.testId
+          }
+        });
+      }
+
+      // Streak (simplified - would need more complex logic)
+      const { start: todayStart } = studentService.getUtcDayRange();
+      let streakDays = 0;
+      let currentDate = new Date(todayStart);
+      for (let i = 0; i < 30; i++) {
+        const dayStart = new Date(currentDate);
+        const dayEnd = new Date(currentDate);
+        dayEnd.setDate(dayEnd.getDate() + 1);
+
+        const hasTest = results.some(r => {
+          const submitted = new Date(r.submittedAt);
+          return submitted >= dayStart && submitted < dayEnd;
+        });
+
+        if (hasTest) {
+          streakDays++;
+        } else {
+          break;
+        }
+        currentDate.setDate(currentDate.getDate() - 1);
+      }
+
+      if (streakDays >= 5) {
+        achievements.push({
+          id: 'streak',
+          type: 'streak',
+          title: `${streakDays}-day practice streak`,
+          description: `Completed tests for ${streakDays} consecutive days`,
+          icon: 'Activity',
+          color: 'text-orange-500',
+          achievedAt: new Date(),
+          timeAgo: 'Active now',
+          metadata: {
+            streakDays,
+            isActive: true
+          }
+        });
+      }
+
+      return achievements.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt));
+    } catch (error) {
+      logger.error('Error fetching achievements', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getFullActivityLog: async (studentId, options = {}) => {
+    try {
+      const {
+        page = 1,
+        limit = 20,
+        startDate,
+        endDate,
+        type
+      } = options;
+
+      const query = { studentId };
+      
+      if (startDate || endDate) {
+        query.submittedAt = {};
+        if (startDate) query.submittedAt.$gte = new Date(startDate);
+        if (endDate) query.submittedAt.$lte = new Date(endDate);
+      }
+
+      if (type && type !== 'all') {
+        // This would need to be mapped to actual activity types
+      }
+
+      // Similar to getRecentActivity but with pagination
+      const skip = (page - 1) * limit;
+      const results = await Result.find({ ...query, status: 'completed' })
+        .populate('testId', 'title')
+        .sort({ submittedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+
+      const activities = results.map(result => ({
+        id: `result_${result._id}`,
+        type: 'test_completed',
+        text: 'Completed Test',
+        detail: `${result.testId?.title || 'Test'} - ${result.wpm} WPM, ${result.accuracy}% Accuracy`,
+        timestamp: result.submittedAt,
+        time: formatTimeAgo(result.submittedAt),
+        icon: 'CheckCircle',
+        color: 'text-green-500',
+        metadata: {
+          testId: result.testId?._id || result.testId,
+          testTitle: result.testId?.title,
+          wpm: result.wpm,
+          accuracy: result.accuracy,
+          resultId: result._id
+        }
+      }));
+
+      const total = await Result.countDocuments({ studentId, status: 'completed' });
+
+      return {
+        activities,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching full activity log', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  exportActivityLog: async (studentId, options = {}) => {
+    try {
+      const { format = 'json', startDate, endDate, type } = options;
+      
+      // For now, return JSON format. CSV/Excel/PDF can be added later with appropriate libraries
+      const result = await studentService.getFullActivityLog(studentId, {
+        page: 1,
+        limit: 10000, // Large limit for export
+        startDate,
+        endDate,
+        type
+      });
+
+      if (format === 'json') {
+        return {
+          format: 'json',
+          data: result.activities,
+          metadata: {
+            totalItems: result.pagination.totalItems,
+            exportedAt: new Date().toISOString()
+          }
+        };
+      }
+
+      // TODO: Implement CSV/Excel/PDF export
+      // For now, return JSON for all formats
+      return {
+        format,
+        data: result.activities,
+        metadata: {
+          totalItems: result.pagination.totalItems,
+          exportedAt: new Date().toISOString(),
+          note: `${format.toUpperCase()} export not yet implemented, returning JSON`
+        }
+      };
+    } catch (error) {
+      logger.error('Error exporting activity log', { error: error.message, studentId });
+      throw error;
+    }
   }
 };
+
+// Helper function to format time ago
+function formatTimeAgo(date) {
+  if (!date) return 'Unknown';
+  const now = new Date();
+  const then = new Date(date);
+  const diffMs = now - then;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} ${diffMins === 1 ? 'minute' : 'minutes'} ago`;
+  if (diffHours < 24) return `${diffHours} ${diffHours === 1 ? 'hour' : 'hours'} ago`;
+  if (diffDays < 7) return `${diffDays} ${diffDays === 1 ? 'day' : 'days'} ago`;
+  return then.toLocaleDateString();
+}
 
 export default studentService;

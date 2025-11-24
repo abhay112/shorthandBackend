@@ -37,6 +37,17 @@ import {
   getCurrentTestForShift,
   submitTestResult,
   getStudentProgress,
+  
+  // Profile API Endpoints
+  getWpmTrend,
+  getBestPerformance,
+  getRecentActivity,
+  getAssignedBatches,
+  getPerformanceRankings,
+  getPerformanceTrends,
+  getAchievements,
+  getFullActivityLog,
+  exportActivityLog,
 } from '../controllers/studentController.js';
 import { authenticateFirebase, requireApproval } from '../middlewares/firebaseAuth.js';
 import { requireStudent } from '../middlewares/authMiddleware.js';
@@ -94,6 +105,28 @@ approvedRouter.get('/batches/:batchId/leaderboard', getBatchLeaderboard);
 // ==================== BATCH MANAGEMENT ====================
 
 approvedRouter.get('/batches', getStudentBatches);
+
+// ==================== PROFILE API ENDPOINTS ====================
+
+// Overview Tab
+approvedRouter.get('/statistics/wpm-trend', getWpmTrend);
+approvedRouter.get('/statistics/best-performance', getBestPerformance);
+approvedRouter.get('/activity/recent', getRecentActivity);
+
+// Batches Tab (already exists but using new method)
+// approvedRouter.get('/batches', getAssignedBatches); // Already defined above
+
+// Tests Tab (using existing endpoint)
+// approvedRouter.get('/results', getStudentResults); // Already defined above
+
+// Results Tab
+approvedRouter.get('/rankings', getPerformanceRankings);
+approvedRouter.get('/statistics/trends', getPerformanceTrends);
+approvedRouter.get('/achievements', getAchievements);
+
+// Activity Tab
+approvedRouter.get('/activity', getFullActivityLog);
+approvedRouter.get('/activity/export', exportActivityLog);
 
 // ==================== STATUS AND HEALTH CHECK ====================
 

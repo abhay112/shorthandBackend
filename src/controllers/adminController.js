@@ -89,9 +89,23 @@ export const blockStudent = asyncHandler(async (req, res) => {
  * Get dashboard statistics
  */
 export const getDashboardStats = asyncHandler(async (req, res) => {
-  const data = await dashboardService.fetchDashboardStats();
+  const {
+    period = 'week',
+    limit = 8,
+    topPerformersLimit = 5,
+    pendingApprovalsLimit = 4,
+    testResultsLimit = 4
+  } = req.query;
 
-  return sendResponse(res, 200, true, 'Dashboard stats fetched', { data }, {
+  const dashboard = await dashboardService.fetchDashboardStats({
+    period,
+    limit: parseInt(limit),
+    topPerformersLimit: parseInt(topPerformersLimit),
+    pendingApprovalsLimit: parseInt(pendingApprovalsLimit),
+    testResultsLimit: parseInt(testResultsLimit)
+  });
+
+  return sendResponse(res, 200, true, 'Dashboard data retrieved successfully', { dashboard }, {
     adminId: req.user.id,
     ip: req.ip
   });

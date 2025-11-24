@@ -1,5 +1,10 @@
 import Student from '../models/Student.js';
+import Result from '../models/Result.js';
+import Test from '../models/Test.js';
+import TestSession from '../models/TestSession.js';
 import { AppError } from '../utils/AppError.js';
+import studentService from './studentService.js';
+import logger from '../utils/logger.js';
 
 const BASE_SELECT = '-firebaseUid';
 const BASE_POPULATE = [
@@ -185,6 +190,185 @@ export const adminStudentService = {
       blocked,
     };
   },
+
+  // Profile API Methods (Admin versions that accept studentId)
+  getStudentProfile: async (studentId) => {
+    try {
+      const student = await Student.findById(studentId)
+        .populate('assignedBatches', 'name description startDate endDate')
+        .select('-firebaseUid');
+
+      if (!student) {
+        throw new AppError('Student not found', 404);
+      }
+
+      // Get statistics
+      const stats = await studentService.getStudentStatistics(studentId);
+      
+      // Format student data with statistics
+      const studentData = student.toObject ? student.toObject() : student;
+      return {
+        ...studentData,
+        id: studentData._id,
+        approved: studentData.isApproved,
+        blocked: studentData.isBlocked,
+        active: !studentData.isBlocked && studentData.isApproved,
+        memberSince: studentData.createdAt ? new Date(studentData.createdAt).toISOString().split('T')[0] : null,
+        statistics: stats
+      };
+    } catch (error) {
+      logger.error('Error fetching student profile (admin)', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getStudentWpmTrend: async (studentId, options = {}) => {
+    return studentService.getWpmTrend(studentId, options);
+  },
+
+  getStudentBestPerformance: async (studentId) => {
+    return studentService.getBestPerformance(studentId);
+  },
+
+  getStudentRecentActivity: async (studentId, options = {}) => {
+    return studentService.getRecentActivity(studentId, options);
+  },
+
+  getStudentAssignedBatches: async (studentId) => {
+    return studentService.getAssignedBatchesWithDetails(studentId);
+  },
+
+  getStudentTestHistory: async (studentId, options = {}) => {
+    return studentService.getTestHistory(studentId, options);
+  },
+
+  getStudentPerformanceRankings: async (studentId) => {
+    return studentService.getPerformanceRankings(studentId);
+  },
+
+  getStudentPerformanceTrends: async (studentId, options = {}) => {
+    return studentService.getPerformanceTrends(studentId, options);
+  },
+
+  getStudentAchievements: async (studentId) => {
+    return studentService.getAchievements(studentId);
+  },
+
+  getStudentFullActivityLog: async (studentId, options = {}) => {
+    return studentService.getFullActivityLog(studentId, options);
+  },
+
+  // Student Notes (Admin only)
+  getStudentNotes: async (studentId) => {
+    try {
+      const student = await Student.findById(studentId).select('notes notesUpdatedAt notesUpdatedBy').lean();
+      if (!student) {
+        throw new AppError('Student not found', 404);
+      }
+
+      return {
+        notes: student.notes || '',
+        updatedAt: student.notesUpdatedAt || null,
+        updatedBy: student.notesUpdatedBy || null
+      };
+    } catch (error) {
+      logger.error('Error fetching student notes', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  updateStudentNotes: async (studentId, notes, adminId) => {
+    try {
+      const student = await Student.findByIdAndUpdate(
+        studentId,
+        {
+          notes,
+          notesUpdatedAt: new Date(),
+          notesUpdatedBy: adminId
+        },
+        { new: true }
+      ).select('notes notesUpdatedAt notesUpdatedBy').lean();
+
+      if (!student) {
+        throw new AppError('Student not found', 404);
+      }
+
+      return {
+        notes: student.notes,
+        updatedAt: student.notesUpdatedAt
+      };
+    } catch (error) {
+      logger.error('Error updating student notes', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  // Student Settings (Admin only)
+  getStudentSettings: async (studentId) => {
+    try {
+      const student = await Student.findById(studentId).select('settings').lean();
+      if (!student) {
+        throw new AppError('Student not found', 404);
+      }
+
+      // Return default settings if not set
+      return student.settings || {
+        notifications: {
+          emailNotifications: true,
+          testReminders: true,
+          resultNotifications: true,
+          batchUpdates: true
+        },
+        preferences: {
+          theme: 'light',
+          language: 'en',
+          timezone: 'UTC'
+        },
+        permissions: {
+          canViewResults: true,
+          canViewRankings: true,
+          canRetakeTests: true
+        },
+        restrictions: {
+          maxDailyTests: 5,
+          allowedTestTypes: ['practice', 'assessment'],
+          blockedCategories: []
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching student settings', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  updateStudentSettings: async (studentId, settings) => {
+    try {
+      const student = await Student.findByIdAndUpdate(
+        studentId,
+        { 
+          settings,
+          settingsUpdatedAt: new Date()
+        },
+        { new: true }
+      ).select('settings settingsUpdatedAt').lean();
+
+      if (!student) {
+        throw new AppError('Student not found', 404);
+      }
+
+      return {
+        settings: student.settings,
+        updatedAt: student.settingsUpdatedAt
+      };
+    } catch (error) {
+      logger.error('Error updating student settings', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  exportStudentActivityLog: async (studentId, options = {}) => {
+    return studentService.exportActivityLog(studentId, options);
+  }
 };
 
 export default adminStudentService;

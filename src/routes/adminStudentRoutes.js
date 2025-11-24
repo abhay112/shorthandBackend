@@ -9,6 +9,21 @@ import {
   getStudentStats,
   listStudents,
   unblockStudent,
+  getStudentProfile,
+  getStudentWpmTrend,
+  getStudentBestPerformance,
+  getStudentRecentActivity,
+  getStudentAssignedBatches,
+  getStudentTestHistory,
+  getStudentPerformanceRankings,
+  getStudentPerformanceTrends,
+  getStudentAchievements,
+  getStudentFullActivityLog,
+  getStudentNotes,
+  updateStudentNotes,
+  getStudentSettings,
+  updateStudentSettings,
+  exportStudentActivityLog,
 } from '../controllers/adminStudentController.js';
 
 const router = express.Router();
@@ -25,7 +40,39 @@ router.get('/stats', getStudentStats);
 router.patch('/bulk/approve', bulkApproveStudents);
 router.patch('/bulk/block', bulkBlockStudents);
 
-// Individual student operations
+// Profile API Endpoints (must be before /:id to avoid route conflicts)
+// Main profile
+router.get('/:studentId/profile', getStudentProfile);
+
+// Overview Tab
+router.get('/:studentId/performance/wpm-trend', getStudentWpmTrend);
+router.get('/:studentId/performance/best', getStudentBestPerformance);
+router.get('/:studentId/activity/recent', getStudentRecentActivity);
+
+// Batches Tab
+router.get('/:studentId/batches', getStudentAssignedBatches);
+
+// Tests Tab
+router.get('/:studentId/tests', getStudentTestHistory);
+
+// Results Tab
+router.get('/:studentId/rankings', getStudentPerformanceRankings);
+router.get('/:studentId/performance/trends', getStudentPerformanceTrends);
+router.get('/:studentId/achievements', getStudentAchievements);
+
+// Activity Tab
+router.get('/:studentId/activity', getStudentFullActivityLog);
+router.get('/:studentId/activity/export', exportStudentActivityLog);
+
+// Notes (Admin only)
+router.get('/:studentId/notes', getStudentNotes);
+router.put('/:studentId/notes', updateStudentNotes);
+
+// Settings (Admin only)
+router.get('/:studentId/settings', getStudentSettings);
+router.put('/:studentId/settings', updateStudentSettings);
+
+// Individual student operations (must be last to avoid conflicts)
 router.get('/:id', getStudent);
 router.patch('/:id/approve', approveStudent);
 router.patch('/:id/block', blockStudent);

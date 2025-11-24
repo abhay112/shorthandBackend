@@ -610,14 +610,19 @@ const testService = {
 
     // Get unique students who attempted
     const attemptedStudentIds = [...new Set(allResults.map(r => r.studentId._id.toString()))];
-    const attemptedStudents = studentsInBatch.filter(s => 
-      attemptedStudentIds.includes(s._id.toString())
-    );
-
+    
     // Get unique students who completed
     const completedStudentIds = [...new Set(completedResults.map(r => r.studentId._id.toString()))];
     const completedStudents = studentsInBatch.filter(s => 
       completedStudentIds.includes(s._id.toString())
+    );
+
+    // Get students who attempted but didn't complete (exclude completed students)
+    const attemptedButNotCompletedIds = attemptedStudentIds.filter(
+      id => !completedStudentIds.includes(id)
+    );
+    const attemptedStudents = studentsInBatch.filter(s => 
+      attemptedButNotCompletedIds.includes(s._id.toString())
     );
 
     // Get students who haven't attempted
@@ -661,6 +666,7 @@ const testService = {
         _id: s._id,
         name: s.name,
         email: s.email,
+        attempts: allResults.filter(r => r.studentId._id.toString() === s._id.toString()).length,
         bestResult: completedResults
           .filter(r => r.studentId._id.toString() === s._id.toString())
           .sort((a, b) => (b.wpm * b.accuracy) - (a.wpm * a.accuracy))[0] || null
@@ -724,6 +730,11 @@ const testService = {
     const batch = await Batch.findById(batchId);
     if (!batch) {
       throw new AppError('Batch not found', 404);
+    }
+
+    // Check if rankings are generated - if so, test cannot be reopened
+    if (test.areRankingsGeneratedForBatch(batchId)) {
+      throw new AppError('Cannot reopen test: Rankings have already been generated for this batch', 400);
     }
 
     // Check if already open
