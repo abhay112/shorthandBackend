@@ -886,10 +886,13 @@ const studentService = {
 
       // Get ranking context if available
       let rankingContext = null;
-      if (result.rank) {
+      if (result.rank && result.batchId && result.testId) {
+        const batchId = result.batchId._id || result.batchId;
+        const testId = result.testId._id || result.testId;
+        
         const totalResults = await Result.countDocuments({
-          batchId: result.batchId._id,
-          testId: result.testId._id,
+          batchId,
+          testId,
           status: 'completed'
         });
 
@@ -897,6 +900,13 @@ const studentService = {
           rank: result.rank,
           percentile: result.percentile,
           totalParticipants: totalResults
+        };
+      } else if (result.rank) {
+        // If rank exists but references are null, still include rank info
+        rankingContext = {
+          rank: result.rank,
+          percentile: result.percentile,
+          totalParticipants: null
         };
       }
 
@@ -940,12 +950,41 @@ const studentService = {
         }
       } : null;
 
-      return {
+      // Handle null references in result
+      const formattedResult = {
         ...result,
+        testId: result.testId ? {
+          _id: result.testId._id || result.testId,
+          title: result.testId.title || 'Deleted Test',
+          description: result.testId.description || null,
+          difficulty: result.testId.difficulty || null,
+          category: result.testId.category || null,
+          duration: result.testId.duration || null,
+          referenceText: result.testId.referenceText || null
+        } : {
+          _id: null,
+          title: 'Deleted Test',
+          description: null,
+          difficulty: null,
+          category: null,
+          duration: null,
+          referenceText: null
+        },
+        batchId: result.batchId ? {
+          _id: result.batchId._id || result.batchId,
+          name: result.batchId.name || 'Deleted Batch',
+          description: result.batchId.description || null
+        } : {
+          _id: null,
+          name: 'Deleted Batch',
+          description: null
+        },
         rankingContext,
         errorStats,
         comparison
       };
+
+      return formattedResult;
     } catch (error) {
       logger.error('Error fetching student result by ID', { error: error.message, studentId, resultId });
       throw error;
@@ -1039,6 +1078,152 @@ const studentService = {
       return rankings;
     } catch (error) {
       logger.error('Error fetching batch leaderboard', { error: error.message, batchId, testId });
+      throw error;
+    }
+  },
+
+  getBatchLeaderboardDetailed: async (studentId, batchId, options = {}) => {
+    try {
+      const {
+        testId = null,
+        metric = 'overall',
+        period = 'all',
+        page = 1,
+        limit = 20
+      } = options;
+
+      // Verify enrollment
+      const student = await Student.findById(studentId).select('assignedBatches').lean();
+      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+        throw createError('You are not enrolled in this batch', 403);
+      }
+
+      // Get all students in batch
+      const batchStudents = await Student.find({ assignedBatches: batchId })
+        .select('_id name email')
+        .lean();
+      const batchStudentIds = batchStudents.map(s => s._id);
+
+      // Get period start date
+      const periodStart = getPeriodStartDate(period);
+
+      // Build query for results
+      const resultQuery = {
+        studentId: { $in: batchStudentIds },
+        batchId,
+        status: 'completed'
+      };
+      if (testId) {
+        resultQuery.testId = testId;
+      }
+      if (periodStart) {
+        resultQuery.submittedAt = { $gte: periodStart };
+      }
+
+      // Get all results for this batch
+      const results = await Result.find(resultQuery).lean();
+
+      // Get total tests for the batch
+      const totalTests = await Test.countDocuments({
+        $or: [
+          { assignedBatches: batchId },
+          { 'assignedDays.batchId': batchId }
+        ],
+        isActive: true,
+        isPublished: true
+      });
+
+      // Calculate metrics per student
+      const studentMetrics = {};
+      batchStudents.forEach(student => {
+        studentMetrics[student._id.toString()] = {
+          student,
+          wpm: [],
+          accuracy: [],
+          testIds: new Set()
+        };
+      });
+
+      results.forEach(result => {
+        const sid = result.studentId.toString();
+        if (studentMetrics[sid]) {
+          studentMetrics[sid].wpm.push(result.wpm);
+          studentMetrics[sid].accuracy.push(result.accuracy);
+          studentMetrics[sid].testIds.add(result.testId.toString());
+        }
+      });
+
+      // Calculate overall scores
+      const leaderboardData = Object.values(studentMetrics)
+        .map(data => {
+          const avgWpm = data.wpm.length > 0
+            ? Math.round((data.wpm.reduce((a, b) => a + b, 0) / data.wpm.length) * 10) / 10
+            : 0;
+          const avgAccuracy = data.accuracy.length > 0
+            ? Math.round((data.accuracy.reduce((a, b) => a + b, 0) / data.accuracy.length) * 10) / 10
+            : 0;
+          const testsCompleted = data.testIds.size;
+          const completionRate = totalTests > 0
+            ? Math.round((testsCompleted / totalTests) * 100 * 10) / 10
+            : 0;
+          const overallScore = (avgWpm * 0.4) + (avgAccuracy * 0.4) + (completionRate * 0.2);
+
+          return {
+            student: {
+              id: data.student._id,
+              name: data.student.name || 'Unknown',
+              email: data.student.email || ''
+            },
+            metrics: {
+              averageWpm: avgWpm,
+              averageAccuracy: avgAccuracy,
+              completionRate,
+              overallScore: Math.round(overallScore * 10) / 10
+            },
+            testsCompleted,
+            totalTests
+          };
+        })
+        .filter(item => item.testsCompleted > 0); // Only include students with at least one test
+
+      // Sort by metric
+      if (metric === 'wpm') {
+        leaderboardData.sort((a, b) => b.metrics.averageWpm - a.metrics.averageWpm);
+      } else if (metric === 'accuracy') {
+        leaderboardData.sort((a, b) => b.metrics.averageAccuracy - a.metrics.averageAccuracy);
+      } else if (metric === 'completionRate') {
+        leaderboardData.sort((a, b) => b.metrics.completionRate - a.metrics.completionRate);
+      } else {
+        // overall
+        leaderboardData.sort((a, b) => b.metrics.overallScore - a.metrics.overallScore);
+      }
+
+      // Add ranks
+      leaderboardData.forEach((item, index) => {
+        item.rank = index + 1;
+      });
+
+      // Paginate
+      const skip = (page - 1) * limit;
+      const paginatedLeaderboard = leaderboardData.slice(skip, skip + limit);
+
+      // Find current student
+      const currentStudentData = leaderboardData.find(
+        item => item.student.id.toString() === studentId.toString()
+      );
+
+      return {
+        leaderboard: paginatedLeaderboard,
+        currentStudent: currentStudentData || null,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(leaderboardData.length / limit),
+          totalItems: leaderboardData.length,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching detailed batch leaderboard', { error: error.message, studentId, batchId });
       throw error;
     }
   },
@@ -1817,6 +2002,416 @@ const studentService = {
     }
   },
 
+  // Batch Management Methods
+  getStudentBatchesList: async (studentId, options = {}) => {
+    try {
+      const {
+        status = 'all',
+        search,
+        page = 1,
+        limit = 20,
+        sortBy = 'startDate',
+        sortOrder = 'desc'
+      } = options;
+
+      // Find student to get enrolled batches
+      const student = await Student.findById(studentId).select('assignedBatches').lean();
+      if (!student || !student.assignedBatches || student.assignedBatches.length === 0) {
+        return {
+          batches: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 0,
+            totalItems: 0,
+            itemsPerPage: limit,
+            hasNextPage: false,
+            hasPreviousPage: false
+          },
+          summary: {
+            totalBatches: 0,
+            activeBatches: 0,
+            inactiveBatches: 0,
+            completedBatches: 0,
+            totalProgress: 0
+          }
+        };
+      }
+
+      // Build query
+      const query = { _id: { $in: student.assignedBatches } };
+
+      // Search filter
+      if (search) {
+        query.$or = [
+          { name: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } },
+          { code: { $regex: search, $options: 'i' } }
+        ];
+      }
+
+      // Get all batches first to calculate status
+      const allBatches = await Batch.find(query).lean();
+      const now = new Date();
+
+      // Filter by status
+      let filteredBatches = allBatches;
+      if (status !== 'all') {
+        filteredBatches = allBatches.filter(batch => {
+          const batchStatus = calculateBatchStatus(batch, now);
+          return batchStatus === status;
+        });
+      }
+
+      // Sort
+      const sortOptions = {};
+      if (sortBy === 'name') {
+        sortOptions.name = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'startDate') {
+        sortOptions.startDate = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'endDate') {
+        sortOptions.endDate = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'progress') {
+        // Will sort after calculating progress
+      }
+
+      // Get batch IDs for pagination
+      const batchIds = filteredBatches.map(b => b._id);
+      const skip = (page - 1) * limit;
+      const paginatedBatchIds = batchIds.slice(skip, skip + limit);
+
+      // Get paginated batches with details
+      const batches = await Batch.find({ _id: { $in: paginatedBatchIds } })
+        .populate('createdBy', 'name email')
+        .sort(sortBy === 'progress' ? { createdAt: -1 } : sortOptions)
+        .lean();
+
+      // Calculate statistics for each batch
+      const batchesWithStats = await Promise.all(
+        batches.map(async (batch) => {
+          const stats = await calculateBatchStatistics(studentId, batch._id);
+          const batchStatus = calculateBatchStatus(batch, now);
+          const enrollment = await getStudentEnrollment(studentId, batch._id);
+          const certificate = await getBatchCertificate(studentId, batch, batchStatus);
+
+          return {
+            id: batch._id,
+            _id: batch._id,
+            name: batch.name,
+            code: batch.code || `BATCH-${batch._id.toString().substring(0, 8).toUpperCase()}`,
+            description: batch.description || '',
+            status: batchStatus,
+            startDate: batch.startDate,
+            endDate: batch.endDate,
+            createdAt: batch.createdAt,
+            updatedAt: batch.updatedAt,
+            statistics: stats,
+            enrollment,
+            certificate
+          };
+        })
+      );
+
+      // Sort by progress if needed
+      if (sortBy === 'progress') {
+        batchesWithStats.sort((a, b) => {
+          const progressA = a.statistics.progress || 0;
+          const progressB = b.statistics.progress || 0;
+          return sortOrder === 'asc' ? progressA - progressB : progressB - progressA;
+        });
+      }
+
+      // Calculate summary
+      const summary = calculateBatchesSummary(filteredBatches, now, studentId);
+
+      return {
+        batches: batchesWithStats,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(filteredBatches.length / limit),
+          totalItems: filteredBatches.length,
+          itemsPerPage: limit,
+          hasNextPage: page < Math.ceil(filteredBatches.length / limit),
+          hasPreviousPage: page > 1
+        },
+        summary
+      };
+    } catch (error) {
+      logger.error('Error fetching student batches list', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  getBatchDetails: async (studentId, batchId) => {
+    try {
+      // Verify student is enrolled
+      const student = await Student.findById(studentId).select('assignedBatches').lean();
+      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+        throw createError('You are not enrolled in this batch', 403);
+      }
+
+      const batch = await Batch.findById(batchId)
+        .populate('createdBy', 'name email')
+        .lean();
+
+      if (!batch) {
+        throw createError('Batch not found', 404);
+      }
+
+      const now = new Date();
+      const stats = await calculateBatchStatistics(studentId, batchId);
+      const batchStatus = calculateBatchStatus(batch, now);
+      const enrollment = await getStudentEnrollment(studentId, batchId);
+
+      return {
+        id: batch._id,
+        _id: batch._id,
+        name: batch.name,
+        code: batch.code || `BATCH-${batch._id.toString().substring(0, 8).toUpperCase()}`,
+        description: batch.description || '',
+        status: batchStatus,
+        startDate: batch.startDate,
+        endDate: batch.endDate,
+        createdAt: batch.createdAt,
+        updatedAt: batch.updatedAt,
+        instructor: batch.createdBy ? {
+          id: batch.createdBy._id,
+          name: batch.createdBy.name,
+          email: batch.createdBy.email
+        } : null,
+        statistics: {
+          ...stats,
+          rank: await getStudentRankInBatch(studentId, batchId),
+          totalStudentsInBatch: await Student.countDocuments({ assignedBatches: batchId })
+        },
+        enrollment
+      };
+    } catch (error) {
+      logger.error('Error fetching batch details', { error: error.message, studentId, batchId });
+      throw error;
+    }
+  },
+
+  getBatchTests: async (studentId, batchId, options = {}) => {
+    try {
+      // Verify enrollment
+      const student = await Student.findById(studentId).select('assignedBatches').lean();
+      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+        throw createError('You are not enrolled in this batch', 403);
+      }
+
+      const { status, page = 1, limit = 20 } = options;
+
+      // Get tests assigned to this batch
+      const tests = await Test.find({
+        $or: [
+          { assignedBatches: batchId },
+          { 'assignedDays.batchId': batchId }
+        ],
+        isActive: true,
+        isPublished: true
+      })
+        .populate('assignedDays.batchId', 'name')
+        .lean();
+
+      // Get student's results for these tests
+      const testIds = tests.map(t => t._id);
+      const results = await Result.find({
+        studentId,
+        testId: { $in: testIds },
+        status: 'completed'
+      }).lean();
+
+      const resultsByTest = {};
+      results.forEach(r => {
+        if (!resultsByTest[r.testId]) {
+          resultsByTest[r.testId] = [];
+        }
+        resultsByTest[r.testId].push(r);
+      });
+
+      // Format tests with attempt info
+      const formattedTests = await Promise.all(
+        tests.map(async (test) => {
+          const testResults = resultsByTest[test._id] || [];
+          const totalAttempts = testResults.length;
+          const hasCompleted = totalAttempts > 0;
+          const lastAttempt = hasCompleted ? testResults[0] : null;
+
+          // Get attempt usage
+          const { completedAttempts, reservedAttempts } = await getAttemptUsage(studentId, test._id);
+          const remainingAttempts = test.maxRetakes - completedAttempts - reservedAttempts;
+
+          // Determine test status
+          const now = new Date();
+          let testStatus = 'available';
+          if (hasCompleted && remainingAttempts <= 0) {
+            testStatus = 'completed';
+          } else if (test.assignedDays && test.assignedDays.length > 0) {
+            const dayAssignment = test.assignedDays.find(ad => 
+              ad.batchId && (ad.batchId._id || ad.batchId).toString() === batchId.toString()
+            );
+            if (dayAssignment) {
+              if (now < dayAssignment.assignedDate) {
+                testStatus = 'upcoming';
+              } else if (dayAssignment.availableUntil && now > dayAssignment.availableUntil) {
+                testStatus = 'overdue';
+              }
+            }
+          }
+
+          // Filter by status if specified
+          if (status && status !== 'all' && testStatus !== status) {
+            return null;
+          }
+
+          return {
+            id: test._id,
+            _id: test._id,
+            title: test.title,
+            description: test.description || '',
+            testType: test.testType,
+            difficulty: test.difficulty,
+            category: test.category,
+            duration: test.duration,
+            maxRetakes: test.maxRetakes,
+            status: testStatus,
+            scheduledDate: test.assignedDays && test.assignedDays.length > 0
+              ? test.assignedDays[0].assignedDate
+              : null,
+            dueDate: test.assignedDays && test.assignedDays.length > 0 && test.assignedDays[0].availableUntil
+              ? test.assignedDays[0].availableUntil
+              : null,
+            attemptInfo: {
+              totalAttempts,
+              maxRetakes: test.maxRetakes,
+              remainingAttempts: Math.max(0, remainingAttempts),
+              hasCompleted,
+              lastAttemptDate: lastAttempt ? lastAttempt.submittedAt : null,
+              lastAttemptScore: lastAttempt ? {
+                wpm: lastAttempt.wpm,
+                accuracy: lastAttempt.accuracy,
+                rank: lastAttempt.rank,
+                percentile: lastAttempt.percentile
+              } : null
+            },
+            canTakeTest: testStatus === 'available' && remainingAttempts > 0,
+            canViewContent: true
+          };
+        })
+      );
+
+      // Filter out nulls and paginate
+      const validTests = formattedTests.filter(t => t !== null);
+      const skip = (page - 1) * limit;
+      const paginatedTests = validTests.slice(skip, skip + limit);
+
+      return {
+        tests: paginatedTests,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(validTests.length / limit),
+          totalItems: validTests.length,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching batch tests', { error: error.message, studentId, batchId });
+      throw error;
+    }
+  },
+
+  getBatchResults: async (studentId, batchId, options = {}) => {
+    try {
+      // Verify enrollment
+      const student = await Student.findById(studentId).select('assignedBatches').lean();
+      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+        throw createError('You are not enrolled in this batch', 403);
+      }
+
+      const { page = 1, limit = 20, sortBy = 'submittedAt', sortOrder = 'desc' } = options;
+
+      const query = { studentId, batchId, status: 'completed' };
+
+      const sortOptions = {};
+      if (sortBy === 'submittedAt') {
+        sortOptions.submittedAt = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'wpm') {
+        sortOptions.wpm = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'accuracy') {
+        sortOptions.accuracy = sortOrder === 'asc' ? 1 : -1;
+      }
+
+      const skip = (page - 1) * limit;
+      const [results, total] = await Promise.all([
+        Result.find(query)
+          .populate('testId', 'title testType difficulty')
+          .populate('batchId', 'name')
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Result.countDocuments(query)
+      ]);
+
+      const formattedResults = await Promise.all(
+        results.map(async (result) => {
+          const totalStudents = await Result.countDocuments({
+            testId: result.testId._id,
+            status: 'completed'
+          });
+
+          return {
+            id: result._id,
+            _id: result._id,
+            test: result.testId ? {
+              id: result.testId._id,
+              title: result.testId.title,
+              testType: result.testId.testType,
+              difficulty: result.testId.difficulty
+            } : {
+              id: null,
+              title: 'Deleted Test',
+              testType: null,
+              difficulty: null
+            },
+            batch: result.batchId ? {
+              id: result.batchId._id,
+              name: result.batchId.name
+            } : {
+              id: null,
+              name: 'Deleted Batch'
+            },
+            status: result.status,
+            completedAt: result.submittedAt,
+            wpm: result.wpm,
+            accuracy: result.accuracy,
+            rank: result.rank,
+            totalStudents,
+            percentile: result.percentile,
+            duration: result.timeTaken,
+            attempts: {
+              current: result.attemptNumber,
+              max: 3 // Should come from test settings
+            }
+          };
+        })
+      );
+
+      return {
+        results: formattedResults,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching batch results', { error: error.message, studentId, batchId });
+      throw error;
+    }
+  },
+
   exportActivityLog: async (studentId, options = {}) => {
     try {
       const { format = 'json', startDate, endDate, type } = options;
@@ -1874,6 +2469,232 @@ function formatTimeAgo(date) {
   if (diffHours < 24) return `${diffHours} ${diffHours === 1 ? 'hour' : 'hours'} ago`;
   if (diffDays < 7) return `${diffDays} ${diffDays === 1 ? 'day' : 'days'} ago`;
   return then.toLocaleDateString();
+}
+
+// Helper function to calculate batch status
+function calculateBatchStatus(batch, now) {
+  if (!batch.isActive) {
+    return 'inactive';
+  }
+  if (batch.endDate && now > new Date(batch.endDate)) {
+    return 'completed';
+  }
+  if (batch.startDate && now < new Date(batch.startDate)) {
+    return 'inactive';
+  }
+  return 'active';
+}
+
+// Helper function to calculate batch statistics for a student
+async function calculateBatchStatistics(studentId, batchId) {
+  try {
+    // Get all tests assigned to this batch
+    const tests = await Test.find({
+      $or: [
+        { assignedBatches: batchId },
+        { 'assignedDays.batchId': batchId }
+      ],
+      isActive: true,
+      isPublished: true
+    }).lean();
+
+    const testIds = tests.map(t => t._id);
+    const totalTests = tests.length;
+
+    // Get student's completed results for these tests
+    const completedResults = await Result.find({
+      studentId,
+      testId: { $in: testIds },
+      status: 'completed'
+    }).lean();
+
+    const completedTests = new Set(completedResults.map(r => r.testId.toString())).size;
+    const remainingTests = totalTests - completedTests;
+    const progress = totalTests > 0 ? Math.round((completedTests / totalTests) * 100 * 10) / 10 : 0;
+
+    // Calculate averages
+    const averageWpm = completedResults.length > 0
+      ? Math.round((completedResults.reduce((sum, r) => sum + r.wpm, 0) / completedResults.length) * 10) / 10
+      : 0;
+
+    const averageAccuracy = completedResults.length > 0
+      ? Math.round((completedResults.reduce((sum, r) => sum + r.accuracy, 0) / completedResults.length) * 10) / 10
+      : 0;
+
+    const completionRate = totalTests > 0
+      ? Math.round((completedTests / totalTests) * 100 * 10) / 10
+      : 0;
+
+    // Get total students in batch
+    const totalStudents = await Student.countDocuments({ assignedBatches: batchId });
+
+    return {
+      totalStudents,
+      totalTests,
+      completedTests,
+      remainingTests,
+      progress,
+      averageWpm,
+      averageAccuracy,
+      completionRate
+    };
+  } catch (error) {
+    logger.error('Error calculating batch statistics', { error: error.message, studentId, batchId });
+    return {
+      totalStudents: 0,
+      totalTests: 0,
+      completedTests: 0,
+      remainingTests: 0,
+      progress: 0,
+      averageWpm: 0,
+      averageAccuracy: 0,
+      completionRate: 0
+    };
+  }
+}
+
+// Helper function to get student enrollment info
+async function getStudentEnrollment(studentId, batchId) {
+  try {
+    const student = await Student.findById(studentId).lean();
+    if (!student) return null;
+
+    // Find when student was added to batch (simplified - using createdAt as enrolledAt)
+    // In a real system, you might track this in a separate enrollment collection
+    const batch = await Batch.findById(batchId).lean();
+    const now = new Date();
+    const batchStatus = calculateBatchStatus(batch, now);
+
+    return {
+      enrolledAt: student.createdAt, // Simplified - should track actual enrollment date
+      enrollmentStatus: batchStatus === 'completed' ? 'completed' : batch.isActive ? 'active' : 'inactive'
+    };
+  } catch (error) {
+    logger.error('Error getting student enrollment', { error: error.message, studentId, batchId });
+    return {
+      enrolledAt: null,
+      enrollmentStatus: 'unknown'
+    };
+  }
+}
+
+// Helper function to get batch certificate info
+async function getBatchCertificate(studentId, batch, batchStatus) {
+  try {
+    if (batchStatus !== 'completed') {
+      return {
+        available: false,
+        downloadUrl: null,
+        issuedAt: null
+      };
+    }
+
+    // Check if student completed all tests
+    const stats = await calculateBatchStatistics(studentId, batch._id);
+    const certificateAvailable = stats.completionRate === 100;
+
+    return {
+      available: certificateAvailable,
+      downloadUrl: certificateAvailable
+        ? `/api/v1/user/batches/${batch._id}/certificate/download`
+        : null,
+      issuedAt: certificateAvailable ? new Date() : null
+    };
+  } catch (error) {
+    logger.error('Error getting batch certificate', { error: error.message, studentId, batchId: batch._id });
+    return {
+      available: false,
+      downloadUrl: null,
+      issuedAt: null
+    };
+  }
+}
+
+// Helper function to calculate batches summary
+async function calculateBatchesSummary(batches, now, studentId) {
+  let totalProgress = 0;
+  let activeCount = 0;
+  let inactiveCount = 0;
+  let completedCount = 0;
+
+  for (const batch of batches) {
+    const status = calculateBatchStatus(batch, now);
+    if (status === 'active') activeCount++;
+    else if (status === 'inactive') inactiveCount++;
+    else if (status === 'completed') completedCount++;
+
+    const stats = await calculateBatchStatistics(studentId, batch._id);
+    totalProgress += stats.progress;
+  }
+
+  return {
+    totalBatches: batches.length,
+    activeBatches: activeCount,
+    inactiveBatches: inactiveCount,
+    completedBatches: completedCount,
+    totalProgress: batches.length > 0 ? Math.round((totalProgress / batches.length) * 10) / 10 : 0
+  };
+}
+
+// Helper function to get student rank in batch
+async function getStudentRankInBatch(studentId, batchId) {
+  try {
+    // Get all students in batch with their average WPM
+    const students = await Student.find({ assignedBatches: batchId }).select('_id').lean();
+    const studentIds = students.map(s => s._id);
+
+    // Get all results for this batch
+    const results = await Result.find({
+      studentId: { $in: studentIds },
+      batchId,
+      status: 'completed'
+    }).lean();
+
+    // Calculate average WPM per student
+    const studentStats = {};
+    results.forEach(result => {
+      const sid = result.studentId.toString();
+      if (!studentStats[sid]) {
+        studentStats[sid] = { wpm: [], accuracy: [] };
+      }
+      studentStats[sid].wpm.push(result.wpm);
+      studentStats[sid].accuracy.push(result.accuracy);
+    });
+
+    // Calculate averages and sort
+    const rankings = Object.entries(studentStats)
+      .map(([sid, stats]) => ({
+        studentId: sid,
+        avgWpm: stats.wpm.length > 0 ? stats.wpm.reduce((a, b) => a + b, 0) / stats.wpm.length : 0,
+        avgAccuracy: stats.accuracy.length > 0 ? stats.accuracy.reduce((a, b) => a + b, 0) / stats.accuracy.length : 0
+      }))
+      .sort((a, b) => {
+        if (b.avgWpm !== a.avgWpm) return b.avgWpm - a.avgWpm;
+        return b.avgAccuracy - a.avgAccuracy;
+      });
+
+    const studentRank = rankings.findIndex(r => r.studentId.toString() === studentId.toString());
+    return studentRank >= 0 ? studentRank + 1 : null;
+  } catch (error) {
+    logger.error('Error getting student rank in batch', { error: error.message, studentId, batchId });
+    return null;
+  }
+}
+
+// Helper function to get period start date
+function getPeriodStartDate(period) {
+  if (period === 'all') return null;
+  const now = new Date();
+  if (period === 'week') {
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    return weekAgo;
+  } else if (period === 'month') {
+    const monthAgo = new Date(now);
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
+    return monthAgo;
+  }
+  return null;
 }
 
 export default studentService;

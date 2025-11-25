@@ -29,6 +29,10 @@ import {
 
   // Batch Management
   getStudentBatches,
+  getBatchDetails,
+  getBatchTests,
+  getBatchResults,
+  downloadBatchCertificate,
 
   // Status and Health Check
   getStudentStatus,
@@ -105,6 +109,10 @@ approvedRouter.get('/batches/:batchId/leaderboard', getBatchLeaderboard);
 // ==================== BATCH MANAGEMENT ====================
 
 approvedRouter.get('/batches', getStudentBatches);
+approvedRouter.get('/batches/:batchId', getBatchDetails);
+approvedRouter.get('/batch/:batchId/tests', getBatchTests);
+approvedRouter.get('/batch/:batchId/results', getBatchResults);
+approvedRouter.get('/batches/:batchId/certificate/download', downloadBatchCertificate);
 
 // ==================== PROFILE API ENDPOINTS ====================
 

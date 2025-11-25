@@ -230,15 +230,23 @@ export const getStudentRankings = asyncHandler(async (req, res) => {
 });
 
 export const getBatchLeaderboard = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
   const { batchId } = req.params;
-  const { testId } = req.query;
+  const { testId, metric = 'overall', period = 'all', page = 1, limit = 20 } = req.query;
   
-  const leaderboard = await studentService.getBatchLeaderboard(batchId, testId);
+  // Use detailed leaderboard method for new format
+  const result = await studentService.getBatchLeaderboardDetailed(studentId, batchId, {
+    testId,
+    metric,
+    period,
+    page: parseInt(page),
+    limit: parseInt(limit)
+  });
   
-  return sendResponse(res, 200, true, 'Batch leaderboard fetched successfully', { leaderboard }, {
+  return sendResponse(res, 200, true, 'Leaderboard retrieved successfully', result, {
+    studentId: studentId,
     batchId: batchId,
     testId: testId,
-    studentCount: leaderboard.length,
     ip: req.ip
   });
 });
@@ -246,14 +254,99 @@ export const getBatchLeaderboard = asyncHandler(async (req, res) => {
 // Batch Management
 export const getStudentBatches = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
+  const {
+    status = 'all',
+    search,
+    page = 1,
+    limit = 20,
+    sortBy = 'startDate',
+    sortOrder = 'desc'
+  } = req.query;
   
-  const student = await studentService.getProfile(studentId);
+  const result = await studentService.getStudentBatchesList(studentId, {
+    status,
+    search,
+    page: parseInt(page),
+    limit: Math.min(parseInt(limit), 100),
+    sortBy,
+    sortOrder
+  });
   
-  return sendResponse(res, 200, true, 'Student batches fetched successfully', { batches: student.assignedBatches }, {
+  return sendResponse(res, 200, true, 'Batches retrieved successfully', result, {
     studentId: studentId,
-    batchCount: student.assignedBatches.length,
+    batchCount: result.batches.length,
     ip: req.ip
   });
+});
+
+export const getBatchDetails = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { batchId } = req.params;
+  
+  const batch = await studentService.getBatchDetails(studentId, batchId);
+  
+  return sendResponse(res, 200, true, 'Batch details retrieved successfully', { batch }, {
+    studentId: studentId,
+    batchId: batchId,
+    ip: req.ip
+  });
+});
+
+export const getBatchTests = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { batchId } = req.params;
+  const { status, page = 1, limit = 20 } = req.query;
+  
+  const result = await studentService.getBatchTests(studentId, batchId, {
+    status,
+    page: parseInt(page),
+    limit: parseInt(limit)
+  });
+  
+  return sendResponse(res, 200, true, 'Batch tests retrieved successfully', result, {
+    studentId: studentId,
+    batchId: batchId,
+    ip: req.ip
+  });
+});
+
+export const getBatchResults = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { batchId } = req.params;
+  const { page = 1, limit = 20, sortBy = 'submittedAt', sortOrder = 'desc' } = req.query;
+  
+  const result = await studentService.getBatchResults(studentId, batchId, {
+    page: parseInt(page),
+    limit: parseInt(limit),
+    sortBy,
+    sortOrder
+  });
+  
+  return sendResponse(res, 200, true, 'Batch results retrieved successfully', result, {
+    studentId: studentId,
+    batchId: batchId,
+    ip: req.ip
+  });
+});
+
+export const downloadBatchCertificate = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { batchId } = req.params;
+  
+  // Verify enrollment and completion
+  const batch = await studentService.getBatchDetails(studentId, batchId);
+  
+  if (batch.status !== 'completed') {
+    throw createError('Batch is not completed or certificate is not available', 403);
+  }
+  
+  if (batch.statistics.completionRate !== 100) {
+    throw createError('Certificate not available. Please complete all tests in this batch.', 403);
+  }
+  
+  // TODO: Generate and return certificate PDF
+  // For now, return a placeholder response
+  throw createError('Certificate generation not yet implemented', 501);
 });
 
 // Status and Health Check
