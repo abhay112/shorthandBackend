@@ -51,9 +51,6 @@ import {
   getStudentProgress,
   
   // Profile API Endpoints
-  getWpmTrend,
-  getBestPerformance,
-  getRecentActivity,
   getAssignedBatches,
   getPerformanceRankings,
   getPerformanceTrends,

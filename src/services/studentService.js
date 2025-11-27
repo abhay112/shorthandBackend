@@ -129,20 +129,6 @@ const studentService = {
       }
 
       // Get statistics
-<<<<<<< Updated upstream
-      const stats = await studentService.getStudentStatistics(studentId);
-      
-      // Format student data with statistics
-      const studentData = student.toObject ? student.toObject() : student;
-      return {
-        ...studentData,
-        id: studentData._id,
-        approved: studentData.isApproved,
-        blocked: studentData.isBlocked,
-        active: !studentData.isBlocked && studentData.isApproved,
-        memberSince: studentData.createdAt ? new Date(studentData.createdAt).toISOString().split('T')[0] : null,
-        statistics: stats
-=======
       const results = await Result.find({
         studentId,
         status: 'completed',
@@ -208,7 +194,6 @@ const studentService = {
           bestWpm
         },
         assignedBatches: formattedBatches
->>>>>>> Stashed changes
       };
     } catch (error) {
       logger.error('Error fetching student profile', { error: error.message, studentId });
@@ -1373,7 +1358,6 @@ const studentService = {
     }
   },
 
-<<<<<<< Updated upstream
   getBatchLeaderboardDetailed: async (studentId, batchId, options = {}) => {
     try {
       const {
@@ -1520,61 +1504,37 @@ const studentService = {
     }
   },
 
-  // Profile API Methods
-  getWpmTrend: async (studentId, options = {}) => {
-    try {
-      const { days = 30, period } = options;
-      let startDate = new Date();
-      
-      if (period === 'week') {
-        startDate.setDate(startDate.getDate() - 7);
-      } else if (period === 'month') {
-        startDate.setDate(startDate.getDate() - 30);
-      } else if (period === 'year') {
-        startDate.setDate(startDate.getDate() - 365);
-      } else {
-        startDate.setDate(startDate.getDate() - days);
-      }
-=======
   // Get WPM trend data
-  getWpmTrend: async (studentId, days = 30) => {
+  getWpmTrend: async (studentId, daysOrOptions = 30) => {
     try {
+      // Handle both number and options object
+      let days = 30;
+      if (typeof daysOrOptions === 'object' && daysOrOptions !== null) {
+        days = parseInt(daysOrOptions.days) || 30;
+      } else if (typeof daysOrOptions === 'number') {
+        days = daysOrOptions;
+      } else {
+        days = parseInt(daysOrOptions) || 30;
+      }
+
+      // Ensure days is a valid number
+      if (isNaN(days) || days <= 0) {
+        days = 30;
+      }
+
       const endDate = new Date();
       const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
       startDate.setHours(0, 0, 0, 0);
       endDate.setHours(23, 59, 59, 999);
->>>>>>> Stashed changes
+
+      // Validate dates are valid
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        throw createError('Invalid date range calculated', 500);
+      }
 
       const results = await Result.find({
         studentId,
         status: 'completed',
-<<<<<<< Updated upstream
-        submittedAt: { $gte: startDate }
-      })
-        .sort({ submittedAt: 1 })
-        .select('wpm submittedAt')
-        .lean();
-
-      // Group by day and calculate average WPM per day
-      const wpmByDay = {};
-      results.forEach(result => {
-        const day = new Date(result.submittedAt).toISOString().split('T')[0];
-        if (!wpmByDay[day]) {
-          wpmByDay[day] = { wpm: [], date: day };
-        }
-        wpmByDay[day].wpm.push(result.wpm);
-      });
-
-      const wpmTrend = Object.keys(wpmByDay)
-        .sort()
-        .map((day, index) => ({
-          day: index + 1,
-          wpm: Math.round(wpmByDay[day].wpm.reduce((a, b) => a + b, 0) / wpmByDay[day].wpm.length),
-          date: new Date(day).toISOString()
-        }));
-
-      return wpmTrend;
-=======
         isValid: true,
         submittedAt: { $gte: startDate, $lte: endDate }
       })
@@ -1632,72 +1592,12 @@ const studentService = {
           days
         }
       };
->>>>>>> Stashed changes
     } catch (error) {
       logger.error('Error fetching WPM trend', { error: error.message, studentId });
       throw error;
     }
   },
 
-<<<<<<< Updated upstream
-  getBestPerformance: async (studentId) => {
-    try {
-      const results = await Result.find({ studentId, status: 'completed' })
-        .populate('testId', 'title')
-        .sort({ submittedAt: -1 })
-        .lean();
-
-      if (results.length === 0) {
-        return {
-          bestWpm: 0,
-          bestAccuracy: 0,
-          bestRank: null,
-          testsToday: 0,
-          bestWpmDate: null,
-          bestAccuracyDate: null,
-          bestRankDate: null,
-          bestRankTest: null
-        };
-      }
-
-      // Get today's test count
-      const { start: todayStart, end: todayEnd } = studentService.getUtcDayRange();
-      const testsToday = results.filter(r => {
-        const submitted = new Date(r.submittedAt);
-        return submitted >= todayStart && submitted < todayEnd;
-      }).length;
-
-      // Find best WPM
-      const bestWpmResult = results.reduce((best, current) => 
-        current.wpm > best.wpm ? current : best
-      );
-
-      // Find best accuracy
-      const bestAccuracyResult = results.reduce((best, current) => 
-        current.accuracy > best.accuracy ? current : best
-      );
-
-      // Find best rank
-      const rankedResults = results.filter(r => r.rank !== null && r.rank !== undefined);
-      const bestRankResult = rankedResults.length > 0 
-        ? rankedResults.reduce((best, current) => 
-            (current.rank < best.rank || best.rank === null) ? current : best
-          )
-        : null;
-
-      return {
-        bestWpm: bestWpmResult.wpm,
-        bestAccuracy: bestAccuracyResult.accuracy,
-        bestRank: bestRankResult ? bestRankResult.rank : null,
-        testsToday,
-        bestWpmDate: bestWpmResult.submittedAt,
-        bestAccuracyDate: bestAccuracyResult.submittedAt,
-        bestRankDate: bestRankResult ? bestRankResult.submittedAt : null,
-        bestRankTest: bestRankResult && bestRankResult.testId ? {
-          id: bestRankResult.testId._id || bestRankResult.testId,
-          title: bestRankResult.testId.title
-        } : null
-=======
   // Get best performance data
   getBestPerformance: async (studentId) => {
     try {
@@ -1729,7 +1629,6 @@ const studentService = {
           bestAccuracy,
           totalTests: results.length
         }
->>>>>>> Stashed changes
       };
     } catch (error) {
       logger.error('Error fetching best performance', { error: error.message, studentId });
@@ -1737,14 +1636,6 @@ const studentService = {
     }
   },
 
-<<<<<<< Updated upstream
-  getRecentActivity: async (studentId, options = {}) => {
-    try {
-      const { limit = 4 } = options;
-      
-      // Get recent results (test completions)
-      const recentResults = await Result.find({ studentId, status: 'completed' })
-=======
   // Get profile overview (combines WPM trend, best performance, and recent activity)
   getProfileOverview: async function(studentId, options = {}) {
     try {
@@ -1752,9 +1643,9 @@ const studentService = {
 
       // Fetch all data in parallel for better performance
       const [wpmTrendData, bestPerformanceData, recentActivities] = await Promise.all([
-        this.getWpmTrend(studentId, days),
-        this.getBestPerformance(studentId),
-        this.getRecentActivity(studentId, activityLimit)
+        studentService.getWpmTrend(studentId, days),
+        studentService.getBestPerformance(studentId),
+        studentService.getRecentActivity(studentId, activityLimit)
       ]);
 
       return {
@@ -1798,70 +1689,11 @@ const studentService = {
         studentId,
         status: 'completed'
       })
->>>>>>> Stashed changes
         .populate('testId', 'title')
         .sort({ submittedAt: -1 })
         .limit(limit)
         .lean();
 
-<<<<<<< Updated upstream
-      // Get recent test sessions (test started)
-      const recentSessions = await TestSession.find({ studentId })
-        .populate('testId', 'title')
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
-
-      // Get audit logs for this student
-      const AuditLog = (await import('../models/AuditLog.js')).default;
-      const auditLogs = await AuditLog.find({
-        entityType: 'Student',
-        entityId: studentId
-      })
-        .sort({ timestamp: -1 })
-        .limit(limit)
-        .lean();
-
-      const activities = [];
-
-      // Process results
-      recentResults.forEach((result, index) => {
-        activities.push({
-          id: `result_${result._id}`,
-          type: 'test_completed',
-          text: 'Completed Test',
-          detail: `${result.testId?.title || 'Test'} - ${result.wpm} WPM, ${result.accuracy}% Accuracy`,
-          timestamp: result.submittedAt,
-          time: formatTimeAgo(result.submittedAt),
-          icon: 'CheckCircle',
-          color: 'text-green-500',
-          metadata: {
-            testId: result.testId?._id || result.testId,
-            testTitle: result.testId?.title,
-            wpm: result.wpm,
-            accuracy: result.accuracy,
-            resultId: result._id
-          }
-        });
-      });
-
-      // Process sessions
-      recentSessions.forEach((session) => {
-        if (session.status === 'not_started' || session.status === 'in_progress') {
-          activities.push({
-            id: `session_${session._id}`,
-            type: 'test_started',
-            text: 'Started Test',
-            detail: `${session.testId?.title || 'Test'} - Session started`,
-            timestamp: session.createdAt,
-            time: formatTimeAgo(session.createdAt),
-            icon: 'Activity',
-            color: 'text-blue-500',
-            metadata: {
-              testId: session.testId?._id || session.testId,
-              testTitle: session.testId?.title,
-              sessionId: session.sessionId
-=======
       completedResults.forEach(result => {
         if (result.testId) {
           activities.push({
@@ -1905,64 +1737,11 @@ const studentService = {
             test: {
               id: session.testId._id.toString(),
               title: session.testId.title
->>>>>>> Stashed changes
             }
           });
         }
       });
 
-<<<<<<< Updated upstream
-      // Process audit logs
-      auditLogs.forEach((log) => {
-        if (log.action === 'UPDATE' && log.changes?.fieldsChanged?.includes('name')) {
-          activities.push({
-            id: `audit_${log._id}`,
-            type: 'profile_updated',
-            text: 'Profile Updated',
-            detail: 'Updated contact information',
-            timestamp: log.timestamp,
-            time: formatTimeAgo(log.timestamp),
-            icon: 'Edit',
-            color: 'text-purple-500',
-            metadata: {
-              fieldsUpdated: log.changes?.fieldsChanged || []
-            }
-          });
-        } else if (log.action === 'ASSIGN_BATCH') {
-          activities.push({
-            id: `audit_${log._id}`,
-            type: 'batch_assigned',
-            text: 'Assigned to Batch',
-            detail: 'Added to batch',
-            timestamp: log.timestamp,
-            time: formatTimeAgo(log.timestamp),
-            icon: 'FileText',
-            color: 'text-orange-500',
-            metadata: {
-              batchId: log.batchId,
-              batchName: log.changes?.after?.batchName
-            }
-          });
-        } else if (log.action === 'APPROVE') {
-          activities.push({
-            id: `audit_${log._id}`,
-            type: 'account_approved',
-            text: 'Account Approved',
-            detail: 'Student account approved by Admin',
-            timestamp: log.timestamp,
-            time: formatTimeAgo(log.timestamp),
-            icon: 'CheckCircle',
-            color: 'text-green-500',
-            metadata: {
-              approvedBy: log.performedBy
-            }
-          });
-        }
-      });
-
-      // Sort by timestamp and limit
-      activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-=======
       // Get student info for batch assignment and approval activities
       const student = await Student.findById(studentId).lean();
       if (student) {
@@ -2015,13 +1794,11 @@ const studentService = {
         return timeB - timeA;
       });
 
->>>>>>> Stashed changes
       return activities.slice(0, limit);
     } catch (error) {
       logger.error('Error fetching recent activity', { error: error.message, studentId });
       throw error;
     }
-<<<<<<< Updated upstream
   },
 
   getAssignedBatchesWithDetails: async (studentId) => {
@@ -3004,8 +2781,6 @@ const studentService = {
       logger.error('Error exporting activity log', { error: error.message, studentId });
       throw error;
     }
-=======
->>>>>>> Stashed changes
   }
 };
 

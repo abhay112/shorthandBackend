@@ -10,11 +10,7 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
   
   const user = await studentService.getProfile(studentId);
   
-<<<<<<< Updated upstream
-  return sendResponse(res, 200, true, 'Student profile retrieved successfully', { student: profile }, {
-=======
   return sendResponse(res, 200, true, 'Profile retrieved successfully', { user }, {
->>>>>>> Stashed changes
     studentId: studentId,
     ip: req.ip
   });
@@ -264,30 +260,6 @@ export const getBatchLeaderboard = asyncHandler(async (req, res) => {
 export const getStudentBatches = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const {
-<<<<<<< Updated upstream
-    status = 'all',
-    search,
-    page = 1,
-    limit = 20,
-    sortBy = 'startDate',
-    sortOrder = 'desc'
-  } = req.query;
-  
-  const result = await studentService.getStudentBatchesList(studentId, {
-    status,
-    search,
-    page: parseInt(page),
-    limit: Math.min(parseInt(limit), 100),
-    sortBy,
-    sortOrder
-  });
-  
-  return sendResponse(res, 200, true, 'Batches retrieved successfully', result, {
-    studentId: studentId,
-    batchCount: result.batches.length,
-    ip: req.ip
-  });
-=======
     status,
     search,
     page,
@@ -409,7 +381,6 @@ export const getRecentActivity = asyncHandler(async (req, res) => {
       ip: req.ip
     }
   );
->>>>>>> Stashed changes
 });
 
 export const getBatchDetails = asyncHandler(async (req, res) => {
@@ -542,41 +513,6 @@ export const getStudentProgress = asyncHandler(async (req, res) => {
   });
 });
 
-// Profile API Endpoints
-export const getWpmTrend = asyncHandler(async (req, res) => {
-  const studentId = req.user.id;
-  const { days, period } = req.query;
-  
-  const wpmTrend = await studentService.getWpmTrend(studentId, { days, period });
-  
-  return sendResponse(res, 200, true, 'WPM trend data retrieved successfully', { wpmTrend }, {
-    studentId,
-    ip: req.ip
-  });
-});
-
-export const getBestPerformance = asyncHandler(async (req, res) => {
-  const studentId = req.user.id;
-  
-  const bestPerformance = await studentService.getBestPerformance(studentId);
-  
-  return sendResponse(res, 200, true, 'Best performance metrics retrieved successfully', { bestPerformance }, {
-    studentId,
-    ip: req.ip
-  });
-});
-
-export const getRecentActivity = asyncHandler(async (req, res) => {
-  const studentId = req.user.id;
-  const { limit } = req.query;
-  
-  const activities = await studentService.getRecentActivity(studentId, { limit });
-  
-  return sendResponse(res, 200, true, 'Recent activity retrieved successfully', { activities }, {
-    studentId,
-    ip: req.ip
-  });
-});
 
 export const getAssignedBatches = asyncHandler(async (req, res) => {
   const studentId = req.user.id;

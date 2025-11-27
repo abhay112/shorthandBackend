@@ -90,27 +90,6 @@ export const blockStudent = asyncHandler(async (req, res) => {
  */
 export const getDashboardStats = asyncHandler(async (req, res) => {
   const {
-<<<<<<< Updated upstream
-    period = 'week',
-    limit = 8,
-    topPerformersLimit = 5,
-    pendingApprovalsLimit = 4,
-    testResultsLimit = 4
-  } = req.query;
-
-  const dashboard = await dashboardService.fetchDashboardStats({
-    period,
-    limit: parseInt(limit),
-    topPerformersLimit: parseInt(topPerformersLimit),
-    pendingApprovalsLimit: parseInt(pendingApprovalsLimit),
-    testResultsLimit: parseInt(testResultsLimit)
-  });
-
-  return sendResponse(res, 200, true, 'Dashboard data retrieved successfully', { dashboard }, {
-    adminId: req.user.id,
-    ip: req.ip
-  });
-=======
     period,
     limit,
     topPerformersLimit,
@@ -138,7 +117,6 @@ export const getDashboardStats = asyncHandler(async (req, res) => {
       ip: req.ip
     }
   );
->>>>>>> Stashed changes
 });
 
 
