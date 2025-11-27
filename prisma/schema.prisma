@@ -1,0 +1,448 @@
+// ============================================
+// PRISMA SCHEMA - NORMALIZED & SCALABLE VERSION
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum StudentRole {
+  student
+  admin
+}
+
+enum AdminRole {
+  admin
+  super_admin
+}
+
+enum TestDifficulty {
+  beginner
+  intermediate
+  advanced
+  expert
+}
+
+enum TestCategory {
+  dictation
+  transcription
+  speed_test
+  accuracy_test
+  comprehensive
+}
+
+enum TestType {
+  curriculum
+  practice
+  assessment
+  special
+}
+
+enum ResultStatus {
+  in_progress
+  completed
+  abandoned
+}
+
+enum TestSessionStatus {
+  not_started
+  in_progress
+  completed
+  abandoned
+  expired
+}
+
+enum TestContentStatus {
+  draft
+  published
+  archived
+}
+
+enum StudentBatchStatus {
+  active
+  completed
+  dropped
+  suspended
+}
+
+enum BatchTestAssignmentStatus {
+  active
+  inactive
+  completed
+  cancelled
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model Student {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  firebaseUid     String      @unique
+  name            String?
+  email           String      @unique
+  role            StudentRole @default(student)
+  isApproved      Boolean     @default(false)
+  isBlocked       Boolean     @default(false)
+  isOnlineMode    Boolean     @default(true)
+  
+  approvedBy      String?     @db.ObjectId
+  approvedAt      DateTime?
+  managedBy       String?     @db.ObjectId
+  
+  lastLogin       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  approvals        Admin?           @relation("StudentApprovals", fields: [approvedBy], references: [id])
+  manager          Admin?           @relation("StudentManager", fields: [managedBy], references: [id])
+  batchEnrollments StudentBatch[]
+  results          Result[]
+  testSessions     TestSession[]
+  rankings         StudentRanking[]
+
+  @@map("students")
+  @@index([approvedBy])
+  @@index([managedBy])
+  @@index([isApproved, isBlocked])
+}
+
+model Admin {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  firebaseUid String    @unique
+  name        String?
+  email       String    @unique
+  role        AdminRole @default(admin)
+  isActive    Boolean   @default(true)
+  lastLogin   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // All relations consolidated here
+  approvedStudents   Student[]             @relation("StudentApprovals")
+  managedStudents    Student[]             @relation("StudentManager")
+  createdBatches     Batch[]
+  uploadedTests      Test[]                @relation("TestUploader")
+  blockedTests       Test[]                @relation("TestBlocker")
+  enrollments        StudentBatch[]        @relation("EnrollmentAdmin")
+  testAssignments    BatchTestAssignment[] @relation("AssignmentAdmin")
+  testClosures       BatchTestAssignment[] @relation("ClosureAdmin")
+  rankingGenerations BatchTestAssignment[] @relation("RankingAdmin")
+
+  @@map("admins")
+  @@index([role, isActive])
+}
+
+model Batch {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String    @unique
+  description String?
+  createdBy   String    @db.ObjectId
+  
+  isActive    Boolean   @default(true)
+  startDate   DateTime?
+  endDate     DateTime?
+  maxStudents Int       @default(50)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  creator            Admin                 @relation(fields: [createdBy], references: [id])
+  studentEnrollments StudentBatch[]
+  testAssignments    BatchTestAssignment[]
+  results            Result[]
+  testSessions       TestSession[]
+  rankings           StudentRanking[]
+
+  @@map("batches")
+  @@index([createdBy])
+  @@index([isActive, startDate, endDate])
+}
+
+model Test {
+  id                   String         @id @default(auto()) @map("_id") @db.ObjectId
+  title                String
+  description          String?
+  audioURL             String?
+  referenceText        String?
+  difficulty           TestDifficulty @default(intermediate)
+  category             TestCategory   @default(comprehensive)
+  testType             TestType       @default(practice)
+  
+  currentContent       String?        @db.ObjectId
+  draftContent         String?        @db.ObjectId
+  latestVersion        Int            @default(0)
+  
+  duration             Int            @default(300)
+  maxRetakes           Int            @default(3)
+  
+  settings             Json?
+  statistics           Json?
+  
+  uploadedBy           String         @db.ObjectId
+  isActive             Boolean        @default(true)
+  isPublished          Boolean        @default(false)
+  publishedAt          DateTime?
+  
+  isBlocked            Boolean        @default(false)
+  blockedBy            String?        @db.ObjectId
+  blockedAt            DateTime?
+  blockReason          String?
+  allowViewWhenBlocked Boolean        @default(true)
+  
+  availableFrom        DateTime?
+  availableUntil       DateTime?
+  
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  uploader         Admin                 @relation("TestUploader", fields: [uploadedBy], references: [id])
+  blocker          Admin?                @relation("TestBlocker", fields: [blockedBy], references: [id])
+  batchAssignments BatchTestAssignment[]
+  contents         TestContent[]
+  results          Result[]
+  testSessions     TestSession[]
+  rankings         StudentRanking[]
+
+  @@map("tests")
+  @@index([uploadedBy])
+  @@index([isActive, isPublished, isBlocked])
+  @@index([testType, difficulty, category])
+  @@index([availableFrom, availableUntil])
+}
+
+model Result {
+  id                  String       @id @default(auto()) @map("_id") @db.ObjectId
+  studentId           String       @db.ObjectId
+  batchId             String       @db.ObjectId
+  testId              String       @db.ObjectId
+  shiftId             String?      @db.ObjectId
+  
+  wpm                 Float
+  accuracy            Float
+  speed               Float
+  totalWords          Int
+  correctWords        Int
+  incorrectWords      Int
+  totalCharacters     Int
+  correctCharacters   Int
+  incorrectCharacters Int
+  
+  timeTaken           Int
+  timeStarted         DateTime
+  timeCompleted       DateTime
+  
+  attemptNumber       Int
+  isRetake            Boolean      @default(false)
+  
+  mistakes            Json?
+  stenographyErrors   Json?
+  
+  sessionId           String
+  
+  status              ResultStatus @default(completed)
+  isValid             Boolean      @default(true)
+  
+  rank                Int?
+  percentile          Float?
+  
+  submittedAt         DateTime     @default(now())
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  student     Student      @relation(fields: [studentId], references: [id])
+  batch       Batch        @relation(fields: [batchId], references: [id])
+  test        Test         @relation(fields: [testId], references: [id])
+  testSession TestSession? @relation(fields: [sessionId], references: [sessionId])
+
+  @@map("results")
+  @@index([studentId, testId])
+  @@index([batchId, testId])
+  @@index([studentId, batchId])
+  @@index([submittedAt])
+  @@index([wpm])
+  @@index([accuracy])
+  @@index([rank])
+  @@index([testId, batchId, wpm, accuracy])
+}
+
+model TestSession {
+  id             String            @id @default(auto()) @map("_id") @db.ObjectId
+  studentId      String            @db.ObjectId
+  batchId        String            @db.ObjectId
+  testId         String            @db.ObjectId
+  sessionId      String            @unique
+  
+  currentAttempt Int               @default(1)
+  totalAttempts  Int               @default(0)
+  status         TestSessionStatus @default(not_started)
+  
+  timeStarted    DateTime?
+  timeCompleted  DateTime?
+  timeExpires    DateTime?
+  
+  canRetake      Boolean           @default(true)
+  maxRetakes     Int               @default(3)
+  
+  sessionData    Json?
+  
+  ipAddress      String?
+  userAgent      String?
+  deviceInfo     Json?
+  
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  student Student  @relation(fields: [studentId], references: [id])
+  batch   Batch    @relation(fields: [batchId], references: [id])
+  test    Test     @relation(fields: [testId], references: [id])
+  results Result[]
+
+  @@map("test_sessions")
+  @@index([studentId, testId])
+  @@index([status, timeExpires])
+  @@index([createdAt])
+}
+
+model TestContent {
+  id            String            @id @default(auto()) @map("_id") @db.ObjectId
+  testId        String            @db.ObjectId
+  version       Int
+  status        TestContentStatus @default(draft)
+  referenceText String            @default("")
+  
+  audio         Json?
+  metadata      Json?
+  
+  createdBy     String?           @db.ObjectId
+  updatedBy     String?           @db.ObjectId
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  publishedAt   DateTime?
+
+  test Test @relation(fields: [testId], references: [id])
+
+  @@unique([testId, version])
+  @@map("test_contents")
+  @@index([status])
+}
+
+model StudentRanking {
+  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
+  studentId           String   @db.ObjectId
+  batchId             String   @db.ObjectId
+  testId              String   @db.ObjectId
+  
+  rank                Int
+  percentile          Float
+  wpm                 Float
+  accuracy            Float
+  speed               Float
+  totalStudents       Int
+  totalAttempts       Int
+  rankingCriteria     Json?
+  
+  previousRank        Int?
+  rankChange          Int?
+  batchRank           Int?
+  overallRank         Int?
+  
+  testDate            DateTime
+  rankingCalculatedAt DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id])
+  batch   Batch   @relation(fields: [batchId], references: [id])
+  test    Test    @relation(fields: [testId], references: [id])
+
+  @@unique([studentId, batchId, testId])
+  @@map("student_rankings")
+  @@index([batchId, testId, rank])
+  @@index([studentId, batchId])
+  @@index([testDate])
+  @@index([wpm, accuracy])
+}
+
+// ============================================
+// JOIN/RELATIONSHIP COLLECTIONS
+// ============================================
+
+model StudentBatch {
+  id            String             @id @default(auto()) @map("_id") @db.ObjectId
+  studentId     String             @db.ObjectId
+  batchId       String             @db.ObjectId
+  
+  enrolledBy    String             @db.ObjectId
+  enrolledAt    DateTime           @default(now())
+  status        StudentBatchStatus @default(active)
+  
+  enrolledUntil DateTime?
+  notes         String?
+  
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  student         Student @relation(fields: [studentId], references: [id])
+  batch           Batch   @relation(fields: [batchId], references: [id])
+  enrolledByAdmin Admin?  @relation("EnrollmentAdmin", fields: [enrolledBy], references: [id])
+
+  @@unique([studentId, batchId])
+  @@map("student_batches")
+  @@index([studentId, status])
+  @@index([batchId, status])
+  @@index([enrolledBy])
+  @@index([enrolledAt])
+}
+
+model BatchTestAssignment {
+  id                  String                    @id @default(auto()) @map("_id") @db.ObjectId
+  batchId             String                    @db.ObjectId
+  testId              String                    @db.ObjectId
+  
+  assignedBy          String                    @db.ObjectId
+  assignedAt          DateTime                  @default(now())
+  assignedDate        DateTime
+  dayNumber           Int?
+  priority            Int                       @default(1)
+  status              BatchTestAssignmentStatus @default(active)
+  
+  availableFrom       DateTime?
+  availableUntil      DateTime?
+  isActive            Boolean                   @default(true)
+  
+  isClosed            Boolean                   @default(false)
+  closedBy            String?                   @db.ObjectId
+  closedAt            DateTime?
+  closureReason       String?
+  
+  rankingsGenerated   Boolean                   @default(false)
+  rankingsGeneratedBy String?                   @db.ObjectId
+  rankingsGeneratedAt DateTime?
+  
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  batch         Batch  @relation(fields: [batchId], references: [id])
+  test          Test   @relation(fields: [testId], references: [id])
+  assigner      Admin? @relation("AssignmentAdmin", fields: [assignedBy], references: [id])
+  closer        Admin? @relation("ClosureAdmin", fields: [closedBy], references: [id])
+  rankGenerator Admin? @relation("RankingAdmin", fields: [rankingsGeneratedBy], references: [id])
+
+  @@unique([batchId, testId, assignedDate])
+  @@map("batch_test_assignments")
+  @@index([batchId, assignedDate, priority])
+  @@index([testId, assignedDate])
+  @@index([assignedDate, isActive])
+  @@index([status, isActive])
+  @@index([assignedBy])
+}
+

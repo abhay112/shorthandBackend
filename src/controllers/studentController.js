@@ -8,9 +8,13 @@ import logger from '../utils/logger.js';
 export const getStudentProfile = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   
-  const profile = await studentService.getProfile(studentId);
+  const user = await studentService.getProfile(studentId);
   
+<<<<<<< Updated upstream
   return sendResponse(res, 200, true, 'Student profile retrieved successfully', { student: profile }, {
+=======
+  return sendResponse(res, 200, true, 'Profile retrieved successfully', { user }, {
+>>>>>>> Stashed changes
     studentId: studentId,
     ip: req.ip
   });
@@ -18,11 +22,16 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
 
 export const updateStudentProfile = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
-  const updateData = req.body;
+  const { name } = req.body;
   
-  const updatedProfile = await studentService.updateProfile(studentId, updateData);
+  if (!name || name.trim() === '') {
+    throw createError('Name is required', 400);
+  }
   
-  return sendResponse(res, 200, true, 'Profile updated successfully', { profile: updatedProfile }, {
+  const updateData = { name: name.trim() };
+  const updatedUser = await studentService.updateProfile(studentId, updateData);
+  
+  return sendResponse(res, 200, true, 'Profile updated successfully', { user: updatedUser }, {
     studentId: studentId,
     updates: Object.keys(updateData),
     ip: req.ip
@@ -255,6 +264,7 @@ export const getBatchLeaderboard = asyncHandler(async (req, res) => {
 export const getStudentBatches = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const {
+<<<<<<< Updated upstream
     status = 'all',
     search,
     page = 1,
@@ -277,6 +287,129 @@ export const getStudentBatches = asyncHandler(async (req, res) => {
     batchCount: result.batches.length,
     ip: req.ip
   });
+=======
+    status,
+    search,
+    page,
+    limit,
+    sortBy,
+    sortOrder
+  } = req.query;
+
+  const options = {
+    status: status || undefined,
+    search: search || undefined,
+    page: page ? parseInt(page) : 1,
+    limit: limit ? parseInt(limit) : 100,
+    sortBy: sortBy || 'startDate',
+    sortOrder: sortOrder || 'desc'
+  };
+
+  const result = await studentService.getStudentBatches(studentId, options);
+  
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Student batches fetched successfully',
+    result,
+    {
+      studentId: studentId,
+      batchCount: result.batches.length,
+      totalBatches: result.pagination.totalItems,
+      ip: req.ip
+    }
+  );
+});
+
+// Profile overview endpoint (combines multiple data sources)
+export const getProfileOverview = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { days, activityLimit } = req.query;
+  
+  const options = {
+    days: days ? parseInt(days) : 30,
+    activityLimit: activityLimit ? parseInt(activityLimit) : 5
+  };
+
+  const overviewData = await studentService.getProfileOverview(studentId, options);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Profile overview retrieved successfully',
+    overviewData,
+    {
+      studentId: studentId,
+      days: options.days,
+      activityLimit: options.activityLimit,
+      ip: req.ip
+    }
+  );
+});
+
+// Statistics endpoints
+export const getWpmTrend = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { days } = req.query;
+  const daysParam = days ? parseInt(days) : 30;
+
+  const trendData = await studentService.getWpmTrend(studentId, daysParam);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'WPM trend data retrieved successfully',
+    trendData,
+    {
+      studentId: studentId,
+      days: daysParam,
+      ip: req.ip
+    }
+  );
+});
+
+export const getBestPerformance = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+
+  const performanceData = await studentService.getBestPerformance(studentId);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Best performance data retrieved successfully',
+    performanceData,
+    {
+      studentId: studentId,
+      ip: req.ip
+    }
+  );
+});
+
+// Activity endpoints
+export const getRecentActivity = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { limit } = req.query;
+  const limitParam = limit ? parseInt(limit) : 10;
+
+  const activities = await studentService.getRecentActivity(studentId, limitParam);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Recent activity retrieved successfully',
+    { activities },
+    {
+      studentId: studentId,
+      activityCount: activities.length,
+      ip: req.ip
+    }
+  );
+>>>>>>> Stashed changes
 });
 
 export const getBatchDetails = asyncHandler(async (req, res) => {

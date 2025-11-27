@@ -129,6 +129,7 @@ const studentService = {
       }
 
       // Get statistics
+<<<<<<< Updated upstream
       const stats = await studentService.getStudentStatistics(studentId);
       
       // Format student data with statistics
@@ -141,6 +142,73 @@ const studentService = {
         active: !studentData.isBlocked && studentData.isApproved,
         memberSince: studentData.createdAt ? new Date(studentData.createdAt).toISOString().split('T')[0] : null,
         statistics: stats
+=======
+      const results = await Result.find({
+        studentId,
+        status: 'completed',
+        isValid: true
+      });
+
+      const totalTests = results.length;
+      let averageWpm = 0;
+      let averageAccuracy = 0;
+      let bestWpm = 0;
+
+      if (results.length > 0) {
+        const totalWpm = results.reduce((sum, r) => sum + (r.wpm || 0), 0);
+        const totalAccuracy = results.reduce((sum, r) => sum + (r.accuracy || 0), 0);
+        averageWpm = Math.round((totalWpm / results.length) * 100) / 100;
+        averageAccuracy = Math.round((totalAccuracy / results.length) * 100) / 100;
+        bestWpm = Math.max(...results.map(r => r.wpm || 0));
+      }
+
+      // Generate avatar initials
+      const getAvatarInitials = (name) => {
+        if (!name) return '??';
+        const parts = name.trim().split(' ');
+        if (parts.length >= 2) {
+          return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+        }
+        return name.substring(0, 2).toUpperCase();
+      };
+
+      // Format assigned batches
+      const formattedBatches = (student.assignedBatches || []).map(batch => {
+        const generateCode = (name) => {
+          if (!name) return '';
+          return name
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase())
+            .join('')
+            .substring(0, 10);
+        };
+
+        return {
+          _id: batch._id,
+          name: batch.name || '',
+          code: generateCode(batch.name)
+        };
+      });
+
+      return {
+        _id: student._id,
+        name: student.name || '',
+        email: student.email || '',
+        role: student.role || 'student',
+        isApproved: student.isApproved || false,
+        isBlocked: student.isBlocked || false,
+        active: !student.isBlocked && student.isApproved,
+        createdAt: student.createdAt,
+        lastLogin: student.lastLogin,
+        avatar: getAvatarInitials(student.name),
+        statistics: {
+          totalTests,
+          averageWpm,
+          averageAccuracy,
+          bestWpm
+        },
+        assignedBatches: formattedBatches
+>>>>>>> Stashed changes
       };
     } catch (error) {
       logger.error('Error fetching student profile', { error: error.message, studentId });
@@ -170,7 +238,17 @@ const studentService = {
       }
 
       logger.info('Student profile updated', { studentId, updates });
-      return student;
+      
+      return {
+        _id: student._id,
+        name: student.name || '',
+        email: student.email || '',
+        role: student.role || 'student',
+        isApproved: student.isApproved || false,
+        isBlocked: student.isBlocked || false,
+        active: !student.isBlocked && student.isApproved,
+        updatedAt: student.updatedAt
+      };
     } catch (error) {
       logger.error('Error updating student profile', { error: error.message, studentId });
       throw error;
@@ -1037,6 +1115,219 @@ const studentService = {
     }
   },
 
+  // Get student batches with filtering, search, sorting, pagination, and statistics
+  getStudentBatches: async (studentId, options = {}) => {
+    try {
+      const {
+        status,
+        search,
+        page = 1,
+        limit = 100,
+        sortBy = 'startDate',
+        sortOrder = 'desc'
+      } = options;
+
+      // Find all batches where student is enrolled
+      let query = { students: studentId };
+
+      // Apply search filter
+      if (search) {
+        const searchRegex = new RegExp(search, 'i');
+        query.$or = [
+          { name: searchRegex },
+          { description: searchRegex }
+        ];
+      }
+
+      // Get all batches for the student
+      const allBatches = await Batch.find(query)
+        .populate('tests', 'title duration isActive isPublished')
+        .populate('students', 'name email')
+        .lean();
+
+      const now = new Date();
+
+      // Calculate status and filter
+      const batchesWithStatus = allBatches.map(batch => {
+        let batchStatus;
+        if (batch.startDate && batch.endDate) {
+          const startDate = new Date(batch.startDate);
+          const endDate = new Date(batch.endDate);
+          if (now < startDate) {
+            batchStatus = 'inactive';
+          } else if (now >= startDate && now <= endDate) {
+            batchStatus = 'active';
+          } else {
+            batchStatus = 'completed';
+          }
+        } else if (batch.isActive) {
+          batchStatus = 'active';
+        } else {
+          batchStatus = 'inactive';
+        }
+
+        return {
+          ...batch,
+          status: batchStatus
+        };
+      });
+
+      // Apply status filter
+      let filteredBatches = batchesWithStatus;
+      if (status) {
+        filteredBatches = batchesWithStatus.filter(b => b.status === status);
+      }
+
+      // Get student's results for statistics
+      const studentResults = await Result.find({
+        studentId,
+        status: 'completed',
+        isValid: true
+      })
+        .populate('testId', 'title')
+        .populate('batchId', 'name')
+        .lean();
+
+      // Get student's enrollment info (when they were added to batch)
+      const student = await Student.findById(studentId).select('assignedBatches createdAt').lean();
+      const enrollmentMap = new Map();
+      if (student && student.assignedBatches) {
+        // We'll use createdAt as enrollment date (approximation)
+        // In a real system, you might track this separately
+        student.assignedBatches.forEach((batchId, index) => {
+          enrollmentMap.set(batchId.toString(), {
+            enrolledAt: student.createdAt || new Date(),
+            enrollmentStatus: 'active'
+          });
+        });
+      }
+
+      // Enrich batches with statistics and other data
+      const enrichedBatches = await Promise.all(
+        filteredBatches.map(async (batch) => {
+          const batchId = batch._id.toString();
+          
+          // Get batch tests (active and published)
+          const batchTests = (batch.tests || []).filter(
+            test => test.isActive && test.isPublished
+          );
+          const totalTests = batchTests.length;
+
+          // Get student's results for this batch
+          const batchResults = studentResults.filter(
+            r => r.batchId && r.batchId._id && r.batchId._id.toString() === batchId
+          );
+
+          // Get unique test IDs completed
+          const completedTestIds = new Set(
+            batchResults.map(r => r.testId?._id?.toString()).filter(Boolean)
+          );
+          const completedTests = completedTestIds.size;
+          const remainingTests = Math.max(0, totalTests - completedTests);
+          const progress = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
+
+          // Calculate average WPM and accuracy
+          let averageWpm = 0;
+          let averageAccuracy = 0;
+          if (batchResults.length > 0) {
+            const totalWpm = batchResults.reduce((sum, r) => sum + (r.wpm || 0), 0);
+            const totalAccuracy = batchResults.reduce((sum, r) => sum + (r.accuracy || 0), 0);
+            averageWpm = Math.round((totalWpm / batchResults.length) * 100) / 100;
+            averageAccuracy = Math.round((totalAccuracy / batchResults.length) * 100) / 100;
+          }
+
+          // Calculate completion rate (percentage of tests completed)
+          const completionRate = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
+
+          // Get enrollment info
+          const enrollment = enrollmentMap.get(batchId) || {
+            enrolledAt: batch.createdAt || new Date(),
+            enrollmentStatus: batch.status === 'completed' ? 'completed' : 'active'
+          };
+
+          // Generate batch code from name if not exists
+          const generateCode = (name) => {
+            if (!name) return '';
+            return name
+              .split(' ')
+              .map(word => word.charAt(0).toUpperCase())
+              .join('')
+              .substring(0, 10);
+          };
+
+          return {
+            _id: batch._id,
+            name: batch.name || '',
+            code: generateCode(batch.name),
+            description: batch.description || '',
+            startDate: batch.startDate || null,
+            endDate: batch.endDate || null,
+            status: batch.status,
+            statistics: {
+              totalStudents: (batch.students || []).length,
+              totalTests,
+              completedTests,
+              remainingTests,
+              progress,
+              averageWpm,
+              averageAccuracy,
+              completionRate
+            },
+            enrollment,
+            certificate: {
+              available: false,
+              downloadUrl: null,
+              issuedAt: null
+            }
+          };
+        })
+      );
+
+      // Apply sorting
+      const sortField = sortBy === 'name' ? 'name' : 
+                       sortBy === 'endDate' ? 'endDate' :
+                       sortBy === 'createdAt' ? 'createdAt' : 'startDate';
+      
+      enrichedBatches.sort((a, b) => {
+        let aVal = a[sortField];
+        let bVal = b[sortField];
+
+        // Handle null/undefined values
+        if (aVal === null || aVal === undefined) aVal = '';
+        if (bVal === null || bVal === undefined) bVal = '';
+
+        // Handle dates
+        if (aVal instanceof Date) aVal = aVal.getTime();
+        if (bVal instanceof Date) bVal = bVal.getTime();
+
+        if (sortOrder === 'asc') {
+          return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+        } else {
+          return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+        }
+      });
+
+      // Apply pagination
+      const totalItems = enrichedBatches.length;
+      const totalPages = Math.ceil(totalItems / limit);
+      const skip = (page - 1) * limit;
+      const paginatedBatches = enrichedBatches.slice(skip, skip + limit);
+
+      return {
+        batches: paginatedBatches,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalItems,
+          itemsPerPage: limit
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching student batches', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
   // Batch-specific operations
   getBatchLeaderboard: async (batchId, testId = null) => {
     try {
@@ -1082,6 +1373,7 @@ const studentService = {
     }
   },
 
+<<<<<<< Updated upstream
   getBatchLeaderboardDetailed: async (studentId, batchId, options = {}) => {
     try {
       const {
@@ -1243,10 +1535,20 @@ const studentService = {
       } else {
         startDate.setDate(startDate.getDate() - days);
       }
+=======
+  // Get WPM trend data
+  getWpmTrend: async (studentId, days = 30) => {
+    try {
+      const endDate = new Date();
+      const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+>>>>>>> Stashed changes
 
       const results = await Result.find({
         studentId,
         status: 'completed',
+<<<<<<< Updated upstream
         submittedAt: { $gte: startDate }
       })
         .sort({ submittedAt: 1 })
@@ -1272,12 +1574,72 @@ const studentService = {
         }));
 
       return wpmTrend;
+=======
+        isValid: true,
+        submittedAt: { $gte: startDate, $lte: endDate }
+      })
+        .sort({ submittedAt: 1 })
+        .lean();
+
+      // Group results by day and calculate average WPM per day
+      const dayMap = new Map();
+      
+      // Group results by day
+      results.forEach(result => {
+        if (result.submittedAt) {
+          const resultDate = new Date(result.submittedAt);
+          resultDate.setHours(0, 0, 0, 0);
+          const dayKey = resultDate.toISOString().split('T')[0];
+          
+          if (!dayMap.has(dayKey)) {
+            dayMap.set(dayKey, { wpm: [], date: resultDate });
+          }
+          dayMap.get(dayKey).wpm.push(result.wpm || 0);
+        }
+      });
+
+      // Calculate average WPM per day and create trend array
+      // Sample every 5 days or include days with data
+      const trend = [];
+      const sortedDays = Array.from(dayMap.entries()).sort((a, b) => 
+        new Date(a[1].date) - new Date(b[1].date)
+      );
+
+      sortedDays.forEach(([key, value], index) => {
+        const avgWpm = value.wpm.length > 0
+          ? Math.round((value.wpm.reduce((sum, w) => sum + w, 0) / value.wpm.length) * 100) / 100
+          : 0;
+        
+        // Calculate day number (days since start)
+        const daysSinceStart = Math.floor((value.date - startDate) / (1000 * 60 * 60 * 24)) + 1;
+        
+        // Include if has data or every 5th day
+        if (avgWpm > 0 || daysSinceStart % 5 === 0) {
+          trend.push({
+            day: daysSinceStart,
+            wpm: avgWpm,
+            date: value.date
+          });
+        }
+      });
+
+      // If no data, return empty trend with period info
+      return {
+        trend: trend.length > 0 ? trend : [],
+        period: {
+          startDate,
+          endDate,
+          days
+        }
+      };
+>>>>>>> Stashed changes
     } catch (error) {
       logger.error('Error fetching WPM trend', { error: error.message, studentId });
       throw error;
     }
   },
 
+<<<<<<< Updated upstream
   getBestPerformance: async (studentId) => {
     try {
       const results = await Result.find({ studentId, status: 'completed' })
@@ -1335,6 +1697,39 @@ const studentService = {
           id: bestRankResult.testId._id || bestRankResult.testId,
           title: bestRankResult.testId.title
         } : null
+=======
+  // Get best performance data
+  getBestPerformance: async (studentId) => {
+    try {
+      const results = await Result.find({
+        studentId,
+        status: 'completed',
+        isValid: true
+      })
+        .populate('testId', 'title')
+        .sort({ wpm: -1, accuracy: -1 })
+        .limit(10)
+        .lean();
+
+      const performance = results.map((result, index) => ({
+        test: result.testId?.title || 'Unknown Test',
+        testId: result.testId?._id?.toString() || '',
+        wpm: result.wpm || 0,
+        accuracy: result.accuracy || 0,
+        date: result.submittedAt || result.createdAt
+      }));
+
+      const bestWpm = results.length > 0 ? Math.max(...results.map(r => r.wpm || 0)) : 0;
+      const bestAccuracy = results.length > 0 ? Math.max(...results.map(r => r.accuracy || 0)) : 0;
+
+      return {
+        performance,
+        summary: {
+          bestWpm,
+          bestAccuracy,
+          totalTests: results.length
+        }
+>>>>>>> Stashed changes
       };
     } catch (error) {
       logger.error('Error fetching best performance', { error: error.message, studentId });
@@ -1342,17 +1737,74 @@ const studentService = {
     }
   },
 
+<<<<<<< Updated upstream
   getRecentActivity: async (studentId, options = {}) => {
     try {
       const { limit = 4 } = options;
       
       // Get recent results (test completions)
       const recentResults = await Result.find({ studentId, status: 'completed' })
+=======
+  // Get profile overview (combines WPM trend, best performance, and recent activity)
+  getProfileOverview: async function(studentId, options = {}) {
+    try {
+      const { days = 30, activityLimit = 5 } = options;
+
+      // Fetch all data in parallel for better performance
+      const [wpmTrendData, bestPerformanceData, recentActivities] = await Promise.all([
+        this.getWpmTrend(studentId, days),
+        this.getBestPerformance(studentId),
+        this.getRecentActivity(studentId, activityLimit)
+      ]);
+
+      return {
+        wpmTrend: wpmTrendData.trend || [],
+        bestPerformance: bestPerformanceData.performance || [],
+        recentActivity: recentActivities || [],
+        summary: bestPerformanceData.summary || {
+          bestWpm: 0,
+          bestAccuracy: 0,
+          totalTests: 0
+        }
+      };
+    } catch (error) {
+      logger.error('Error fetching profile overview', { error: error.message, studentId });
+      throw error;
+    }
+  },
+
+  // Get recent activity
+  getRecentActivity: async (studentId, limit = 10) => {
+    try {
+      // Helper function for time ago
+      const getTimeAgo = (date) => {
+        if (!date) return 'Unknown';
+        const now = new Date();
+        const past = new Date(date);
+        const diffInSeconds = Math.floor((now - past) / 1000);
+        
+        if (diffInSeconds < 60) return `${diffInSeconds} seconds ago`;
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
+        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} days ago`;
+        if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
+        return `${Math.floor(diffInSeconds / 2592000)} months ago`;
+      };
+
+      const activities = [];
+
+      // Get recent test completions
+      const completedResults = await Result.find({
+        studentId,
+        status: 'completed'
+      })
+>>>>>>> Stashed changes
         .populate('testId', 'title')
         .sort({ submittedAt: -1 })
         .limit(limit)
         .lean();
 
+<<<<<<< Updated upstream
       // Get recent test sessions (test started)
       const recentSessions = await TestSession.find({ studentId })
         .populate('testId', 'title')
@@ -1409,11 +1861,57 @@ const studentService = {
               testId: session.testId?._id || session.testId,
               testTitle: session.testId?.title,
               sessionId: session.sessionId
+=======
+      completedResults.forEach(result => {
+        if (result.testId) {
+          activities.push({
+            id: `result_${result._id}`,
+            type: 'test_completed',
+            icon: 'CheckCircle',
+            iconColor: 'text-green-500',
+            text: 'Completed Test',
+            detail: `${result.testId.title} - ${result.wpm || 0} WPM, ${result.accuracy || 0}% Accuracy`,
+            time: getTimeAgo(result.submittedAt || result.createdAt),
+            timestamp: result.submittedAt || result.createdAt,
+            test: {
+              id: result.testId._id.toString(),
+              title: result.testId.title
             }
           });
         }
       });
 
+      // Get recent test sessions (started)
+      const recentSessions = await TestSession.find({
+        studentId,
+        status: { $in: ['in_progress', 'not_started'] }
+      })
+        .populate('testId', 'title')
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean();
+
+      recentSessions.forEach(session => {
+        if (session.testId) {
+          activities.push({
+            id: `session_${session._id}`,
+            type: 'test_started',
+            icon: 'Activity',
+            iconColor: 'text-blue-500',
+            text: 'Started Test',
+            detail: `${session.testId.title} - Session started`,
+            time: getTimeAgo(session.timeStarted || session.createdAt),
+            timestamp: session.timeStarted || session.createdAt,
+            test: {
+              id: session.testId._id.toString(),
+              title: session.testId.title
+>>>>>>> Stashed changes
+            }
+          });
+        }
+      });
+
+<<<<<<< Updated upstream
       // Process audit logs
       auditLogs.forEach((log) => {
         if (log.action === 'UPDATE' && log.changes?.fieldsChanged?.includes('name')) {
@@ -1464,11 +1962,66 @@ const studentService = {
 
       // Sort by timestamp and limit
       activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+=======
+      // Get student info for batch assignment and approval activities
+      const student = await Student.findById(studentId).lean();
+      if (student) {
+        // Account approval activity (if recently approved)
+        if (student.isApproved && student.updatedAt) {
+          const daysSinceApproval = (new Date() - new Date(student.updatedAt)) / (1000 * 60 * 60 * 24);
+          if (daysSinceApproval <= 7) {
+            activities.push({
+              id: `approval_${student._id}`,
+              type: 'account_approved',
+              icon: 'CheckCircle',
+              iconColor: 'text-green-500',
+              text: 'Account Approved',
+              detail: 'Student account approved by Admin',
+              time: getTimeAgo(student.updatedAt),
+              timestamp: student.updatedAt
+            });
+          }
+        }
+
+        // Batch assignment activity (approximate from createdAt)
+        if (student.assignedBatches && student.assignedBatches.length > 0) {
+          const batches = await Batch.find({ _id: { $in: student.assignedBatches } })
+            .select('name')
+            .lean();
+          
+          batches.forEach(batch => {
+            activities.push({
+              id: `batch_${batch._id}`,
+              type: 'batch_assigned',
+              icon: 'FileText',
+              iconColor: 'text-orange-500',
+              text: 'Assigned to Batch',
+              detail: `Added to ${batch.name} Batch`,
+              time: getTimeAgo(student.createdAt),
+              timestamp: student.createdAt,
+              batch: {
+                id: batch._id.toString(),
+                name: batch.name
+              }
+            });
+          });
+        }
+      }
+
+      // Sort by timestamp (most recent first) and limit
+      activities.sort((a, b) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return timeB - timeA;
+      });
+
+>>>>>>> Stashed changes
       return activities.slice(0, limit);
     } catch (error) {
       logger.error('Error fetching recent activity', { error: error.message, studentId });
       throw error;
     }
+<<<<<<< Updated upstream
   },
 
   getAssignedBatchesWithDetails: async (studentId) => {
@@ -2451,6 +3004,8 @@ const studentService = {
       logger.error('Error exporting activity log', { error: error.message, studentId });
       throw error;
     }
+=======
+>>>>>>> Stashed changes
   }
 };
 

@@ -3,10 +3,18 @@ import {
   // Profile Management
   getStudentProfile,
   updateStudentProfile,
+  getProfileOverview,
 
   // Dashboard
   getStudentDashboard,
   getStudentStatistics,
+
+  // Statistics
+  getWpmTrend,
+  getBestPerformance,
+
+  // Activity
+  getRecentActivity,
 
   // Test Management
   getCurrentDayTest,
@@ -70,11 +78,23 @@ router.get('/profile', getStudentProfile);
 
 router.patch('/profile', updateStudentProfile);
 
+approvedRouter.get('/profile/overview', getProfileOverview);
+
 // ==================== DASHBOARD ====================
 
 approvedRouter.get('/dashboard', getStudentDashboard);
 
 approvedRouter.get('/statistics', getStudentStatistics);
+
+// ==================== STATISTICS ====================
+
+approvedRouter.get('/statistics/wpm-trend', getWpmTrend);
+
+approvedRouter.get('/statistics/best-performance', getBestPerformance);
+
+// ==================== ACTIVITY ====================
+
+approvedRouter.get('/activity/recent', getRecentActivity);
 
 // ==================== TEST MANAGEMENT ====================
 
