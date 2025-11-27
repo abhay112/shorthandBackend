@@ -908,10 +908,6 @@ const studentService = {
         timeTaken: Math.floor((session.timeCompleted - session.timeStarted) / 1000)
       });
 
-      // Add result to session
-      session.results.push(result._id);
-      await session.save();
-
       // Process result side effects (student linkage, statistics, ranking)
       await processResultSideEffects({
         studentId,
