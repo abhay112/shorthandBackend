@@ -21,12 +21,9 @@ const testContentSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Audio stored as JSON in Prisma
   audio: {
-    url: String,
-    duration: Number,
-    format: String,
-    size: Number,
-    checksum: String
+    type: mongoose.Schema.Types.Mixed
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed,
@@ -49,9 +46,13 @@ const testContentSchema = new mongoose.Schema({
     default: Date.now
   },
   publishedAt: Date
+}, {
+  collection: 'test_contents'
 });
 
-testContentSchema.index({ testId: 1, version: -1 });
+// Unique constraint matching Prisma schema
+testContentSchema.index({ testId: 1, version: 1 }, { unique: true });
+testContentSchema.index({ status: 1 });
 
 testContentSchema.pre('save', function(next) {
   this.updatedAt = new Date();

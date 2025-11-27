@@ -17,14 +17,6 @@ const batchSchema = new mongoose.Schema({
     ref: 'Admin', 
     required: true 
   },
-  students: [{ 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Student' 
-  }],
-  tests: [{ 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Test' 
-  }],
   isActive: { 
     type: Boolean, 
     default: true 
@@ -47,6 +39,8 @@ const batchSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   }
+}, {
+  collection: 'batches'
 });
 
 // Update the updatedAt field before saving
@@ -55,8 +49,8 @@ batchSchema.pre('save', function(next) {
   next();
 });
 
-// Index for better query performance
+// Indexes matching Prisma schema
 batchSchema.index({ createdBy: 1 });
-batchSchema.index({ isActive: 1 });
+batchSchema.index({ isActive: 1, startDate: 1, endDate: 1 });
 
 export default mongoose.model('Batch', batchSchema);

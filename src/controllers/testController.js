@@ -514,3 +514,29 @@ export const generateRankingsForBatchTest = asyncHandler(async (req, res) => {
     { adminId: req.user.id, testId, batchId }
   );
 });
+
+// Toggle test publication (publish/unpublish)
+export const toggleTestPublication = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { publish } = req.body; // Optional: explicitly set publish state (true/false), or omit to toggle
+
+  validateObjectId(id, 'test ID');
+
+  // Convert publish to boolean if provided, otherwise null (toggle)
+  const publishState = publish !== undefined ? Boolean(publish) : null;
+
+  const result = await testService.toggleTestPublication(id, req.user.id, publishState);
+
+  const message = result.action === 'published' 
+    ? 'Test published successfully' 
+    : 'Test unpublished successfully';
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    message,
+    result,
+    { adminId: req.user.id, testId: id, action: result.action }
+  );
+});

@@ -51,7 +51,7 @@ export const approveStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'student ID');
 
-  const student = await adminStudentService.approve(id);
+  const student = await adminStudentService.approve(id, req.user?.id);
 
   logger.info('Student approved by admin', {
     adminId: req.user?.id,
@@ -383,13 +383,17 @@ export const getStudentNotes = asyncHandler(async (req, res) => {
 export const updateStudentNotes = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
   validateObjectId(studentId, 'student ID');
-  const { notes } = req.body;
+  const { notes, batchId } = req.body;
 
   if (typeof notes !== 'string') {
     throw createError('Notes must be a string', 400);
   }
 
-  const updatedNotes = await adminStudentService.updateStudentNotes(studentId, notes, req.user.id);
+  if (batchId) {
+    validateObjectId(batchId, 'batch ID');
+  }
+
+  const updatedNotes = await adminStudentService.updateStudentNotes(studentId, notes, batchId);
 
   return sendResponse(
     res,
@@ -397,7 +401,7 @@ export const updateStudentNotes = asyncHandler(async (req, res) => {
     true,
     'Student notes updated successfully',
     updatedNotes,
-    { adminId: req.user?.id, studentId },
+    { adminId: req.user?.id, studentId, batchId },
   );
 });
 

@@ -56,18 +56,9 @@ const studentRankingSchema = new mongoose.Schema({
     min: 1 
   },
   
-  // Ranking calculation metadata
+  // Ranking calculation metadata (stored as JSON in Prisma)
   rankingCriteria: {
-    primary: { 
-      type: String, 
-      enum: ['wpm', 'accuracy', 'speed', 'combined'], 
-      default: 'combined' 
-    },
-    weights: {
-      wpm: { type: Number, default: 0.4 },
-      accuracy: { type: Number, default: 0.4 },
-      speed: { type: Number, default: 0.2 }
-    }
+    type: mongoose.Schema.Types.Mixed
   },
   
   // Historical ranking data
@@ -96,6 +87,8 @@ const studentRankingSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   }
+}, {
+  collection: 'student_rankings'
 });
 
 // Update the updatedAt field before saving
@@ -104,20 +97,11 @@ studentRankingSchema.pre('save', function(next) {
   next();
 });
 
-// Compound indexes for better query performance
+// Indexes matching Prisma schema
 studentRankingSchema.index({ studentId: 1, batchId: 1, testId: 1 }, { unique: true });
 studentRankingSchema.index({ batchId: 1, testId: 1, rank: 1 });
 studentRankingSchema.index({ studentId: 1, batchId: 1 });
 studentRankingSchema.index({ testDate: -1 });
-studentRankingSchema.index({ wpm: -1 });
-studentRankingSchema.index({ accuracy: -1 });
-
-// Virtual for rank change direction
-studentRankingSchema.virtual('rankChangeDirection').get(function() {
-  if (!this.previousRank) return 'new';
-  if (this.rank < this.previousRank) return 'improved';
-  if (this.rank > this.previousRank) return 'declined';
-  return 'same';
-});
+studentRankingSchema.index({ wpm: -1, accuracy: -1 });
 
 export default mongoose.model('StudentRanking', studentRankingSchema);

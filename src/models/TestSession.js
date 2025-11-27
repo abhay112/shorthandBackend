@@ -77,28 +77,16 @@ const testSessionSchema = new mongoose.Schema({
     default: 3 
   },
   
-  // Session data
+  // Session data (stored as JSON in Prisma)
   sessionData: {
-    currentPosition: { type: Number, default: 0 },
-    lastActivity: Date,
-    isPaused: { type: Boolean, default: false },
-    pauseCount: { type: Number, default: 0 },
-    maxPauses: { type: Number, default: 3 }
+    type: mongoose.Schema.Types.Mixed
   },
-  
-  // Results reference
-  results: [{ 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Result' 
-  }],
   
   // Metadata
   ipAddress: String,
   userAgent: String,
   deviceInfo: {
-    type: String,
-    os: String,
-    browser: String
+    type: mongoose.Schema.Types.Mixed
   },
   
   createdAt: { 
@@ -109,6 +97,8 @@ const testSessionSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   }
+}, {
+  collection: 'test_sessions'
 });
 
 // Update the updatedAt field before saving
@@ -117,20 +107,14 @@ testSessionSchema.pre('save', function(next) {
   next();
 });
 
-// Indexes for better query performance
+// Indexes matching Prisma schema
 testSessionSchema.index({ studentId: 1, testId: 1 });
-testSessionSchema.index({ status: 1 });
-testSessionSchema.index({ timeExpires: 1 });
+testSessionSchema.index({ status: 1, timeExpires: 1 });
 testSessionSchema.index({ createdAt: -1 });
 
 // Virtual for checking if session is expired
 testSessionSchema.virtual('isExpired').get(function() {
   return this.timeExpires && new Date() > this.timeExpires;
-});
-
-// Virtual for checking if student can retake
-testSessionSchema.virtual('canRetakeTest').get(function() {
-  return this.totalAttempts < this.maxRetakes && this.status !== 'completed';
 });
 
 export default mongoose.model('TestSession', testSessionSchema);
