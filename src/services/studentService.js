@@ -920,12 +920,6 @@ const studentService = {
         result
       });
 
-        studentId,
-        testId: session.testId,
-        sessionId,
-        resultId: result._id
-      });
-
       return result;
     } catch (error) {
       throw error;
@@ -1149,8 +1143,30 @@ const studentService = {
         sortOrder = 'desc'
       } = options;
 
-      // Find all batches where student is enrolled
-      let query = { students: studentId };
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      })
+        .populate('batchId')
+        .lean();
+
+      const batchIds = studentBatches.map(sb => sb.batchId?._id || sb.batchId).filter(Boolean);
+
+      if (batchIds.length === 0) {
+        return {
+          batches: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 0,
+            totalItems: 0,
+            itemsPerPage: limit
+          }
+        };
+      }
+
+      // Build query for batches
+      let query = { _id: { $in: batchIds } };
 
       // Apply search filter
       if (search) {
@@ -1163,9 +1179,39 @@ const studentService = {
 
       // Get all batches for the student
       const allBatches = await Batch.find(query)
-        .populate('tests', 'title duration isActive isPublished')
-        .populate('students', 'name email')
+        .populate('createdBy', 'name email')
         .lean();
+
+      // Get test assignments for these batches
+      const testAssignments = await BatchTestAssignment.find({
+        batchId: { $in: batchIds },
+        status: 'active',
+        isActive: true
+      })
+        .populate('testId', 'title duration isActive isPublished')
+        .lean();
+
+      // Group tests by batchId
+      const testsByBatch = {};
+      testAssignments.forEach(ta => {
+        const batchIdStr = String(ta.batchId?._id || ta.batchId);
+        if (!testsByBatch[batchIdStr]) {
+          testsByBatch[batchIdStr] = [];
+        }
+        const test = ta.testId;
+        if (test) {
+          const testId = String(test._id || test);
+          if (!testsByBatch[batchIdStr].some(t => String(t._id || t) === testId)) {
+            testsByBatch[batchIdStr].push(test);
+          }
+        }
+      });
+
+      // Attach tests to batches
+      allBatches.forEach(batch => {
+        const batchIdStr = String(batch._id);
+        batch.tests = testsByBatch[batchIdStr] || [];
+      });
 
       const now = new Date();
 
@@ -1210,19 +1256,26 @@ const studentService = {
         .populate('batchId', 'name')
         .lean();
 
-      // Get student's enrollment info (when they were added to batch)
-      const student = await Student.findById(studentId).select('assignedBatches createdAt').lean();
+      // Get student's enrollment info from StudentBatch join table
       const enrollmentMap = new Map();
-      if (student && student.assignedBatches) {
-        // We'll use createdAt as enrollment date (approximation)
-        // In a real system, you might track this separately
-        student.assignedBatches.forEach((batchId, index) => {
-          enrollmentMap.set(batchId.toString(), {
-            enrolledAt: student.createdAt || new Date(),
-            enrollmentStatus: 'active'
-          });
+      studentBatches.forEach(sb => {
+        const batchId = String(sb.batchId?._id || sb.batchId);
+        enrollmentMap.set(batchId, {
+          enrolledAt: sb.enrolledAt || sb.createdAt || new Date(),
+          enrollmentStatus: sb.status || 'active'
         });
-      }
+      });
+
+      // Get student counts for each batch
+      const studentCounts = await StudentBatch.aggregate([
+        { $match: { batchId: { $in: batchIds }, status: 'active' } },
+        { $group: { _id: '$batchId', count: { $sum: 1 } } }
+      ]);
+      
+      const studentCountMap = new Map();
+      studentCounts.forEach(sc => {
+        studentCountMap.set(String(sc._id), sc.count);
+      });
 
       // Enrich batches with statistics and other data
       const enrichedBatches = await Promise.all(
@@ -1286,7 +1339,7 @@ const studentService = {
             endDate: batch.endDate || null,
             status: batch.status,
             statistics: {
-              totalStudents: (batch.students || []).length,
+              totalStudents: studentCountMap.get(batchId) || 0,
               totalTests,
               completedTests,
               remainingTests,
@@ -2380,9 +2433,15 @@ const studentService = {
         sortOrder = 'desc'
       } = options;
 
-      // Find student to get enrolled batches
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || student.assignedBatches.length === 0) {
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+
+      const batchIds = studentBatches.map(sb => sb.batchId?._id || sb.batchId).filter(Boolean);
+
+      if (batchIds.length === 0) {
         return {
           batches: [],
           pagination: {
@@ -2404,7 +2463,7 @@ const studentService = {
       }
 
       // Build query
-      const query = { _id: { $in: student.assignedBatches } };
+      const query = { _id: { $in: batchIds } };
 
       // Search filter
       if (search) {
@@ -2441,9 +2500,9 @@ const studentService = {
       }
 
       // Get batch IDs for pagination
-      const batchIds = filteredBatches.map(b => b._id);
+      const filteredBatchIds = filteredBatches.map(b => b._id);
       const skip = (page - 1) * limit;
-      const paginatedBatchIds = batchIds.slice(skip, skip + limit);
+      const paginatedBatchIds = filteredBatchIds.slice(skip, skip + limit);
 
       // Get paginated batches with details
       const batches = await Batch.find({ _id: { $in: paginatedBatchIds } })
