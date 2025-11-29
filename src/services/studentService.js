@@ -687,7 +687,7 @@ const studentService = {
         return { canTake: false, reason: 'No access to this test. This test is not assigned to any of your batches.' };
       }
 
-      const { completedAttempts } = await getAttemptUsage(studentId, testId);
+      const { completedAttempts, reservedAttempts } = await getAttemptUsage(studentId, testId);
       // User can access test if maxRetakes is not equal to totalAttempts (completed attempts only)
       const remainingAttempts = test.maxRetakes - completedAttempts;
 
@@ -732,6 +732,14 @@ const studentService = {
       }
 
       if (!canAccessTest) {
+        if (reservedAttempts > 0) {
+          return {
+            canTake: true,
+            remainingAttempts: 0,
+            reservedAttempts,
+            nextAttemptNumber: completedAttempts + 1
+          };
+        }
         // Only block if maxRetakes equals completedAttempts
         return { canTake: false, reason: 'Maximum retakes exceeded' };
       }
@@ -740,6 +748,7 @@ const studentService = {
         canTake: true,
         remainingAttempts,
         nextAttemptNumber: completedAttempts + 1,
+        reservedAttempts,
         completedAttempts // Include in response
       };
     } catch (_err) {
