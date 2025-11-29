@@ -687,7 +687,7 @@ const studentService = {
         return { canTake: false, reason: 'No access to this test. This test is not assigned to any of your batches.' };
       }
 
-      const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
+      const { completedAttempts } = await getAttemptUsage(studentId, testId);
       // User can access test if maxRetakes is not equal to totalAttempts (completed attempts only)
       const remainingAttempts = test.maxRetakes - completedAttempts;
 
@@ -787,7 +787,7 @@ const studentService = {
       
       const studentBatchIds = studentBatches.map(sb => toIdString(sb.batchId)).filter(Boolean);
 
-      const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
+      const { completedAttempts } = await getAttemptUsage(studentId, testId);
       const attemptLimit = test.maxRetakes;
 
       // Check access based on completed attempts only (not totalUsed)
