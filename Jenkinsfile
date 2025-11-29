@@ -1,6 +1,10 @@
 pipeline {
     agent any
     
+    tools {
+        nodejs 'shorthand'  // Use the Node.js tool configured in Jenkins (name: "shorthand")
+    }
+    
     environment {
         // Docker image configuration (leave empty to build locally without registry)
         DOCKER_REGISTRY = ''
@@ -39,9 +43,14 @@ pipeline {
             steps {
                 sh '''
                     echo "📦 Installing npm dependencies..."
+                    echo "Node version: $(node --version)"
+                    echo "NPM version: $(npm --version)"
+                    
                     # Clean npm cache and install fresh
                     npm cache clean --force || true
                     rm -rf node_modules 2>/dev/null || true
+                    
+                    # Install with legacy peer deps to handle version conflicts
                     npm install --legacy-peer-deps
                     echo "✅ Dependencies installed"
                 '''
