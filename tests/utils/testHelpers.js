@@ -9,10 +9,21 @@ import { jest } from '@jest/globals';
  * Setup test database connection
  */
 export const setupTestDB = async () => {
-  const mongoUri = process.env.TEST_MONGO_URI || 'mongodb://localhost:27017/test_shorthand';
+  const mongoUri = process.env.TEST_MONGO_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/test_shorthand';
   
   if (mongoose.connection.readyState === 0) {
-    await mongoose.connect(mongoUri);
+    try {
+      await mongoose.connect(mongoUri, {
+        serverSelectionTimeoutMS: 10000, // 10 seconds timeout
+        connectTimeoutMS: 10000,
+      });
+      console.log('✅ Test database connected successfully');
+    } catch (error) {
+      console.error('❌ Test database connection failed:', error.message);
+      throw error;
+    }
+  } else if (mongoose.connection.readyState === 1) {
+    console.log('✅ Test database already connected');
   }
 };
 

@@ -18,6 +18,15 @@ jobs:
     name: Code Quality & Tests
     runs-on: ubuntu-latest
     
+    # Add MongoDB service container
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_DATABASE: test_shorthand
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,10 +47,29 @@ jobs:
         run: npm audit --audit-level=moderate
         continue-on-error: true
 
+      - name: Wait for MongoDB to be ready
+        run: |
+          echo "Waiting for MongoDB to be ready..."
+          # Install netcat if not available
+          sudo apt-get update && sudo apt-get install -y netcat-openbsd || true
+          # Wait for MongoDB port to be available
+          timeout 60 bash -c 'until nc -z localhost 27017; do echo "Waiting for MongoDB..."; sleep 2; done'
+          # Additional wait to ensure MongoDB is fully initialized
+          sleep 3
+          echo "✅ MongoDB is ready!"
+
       - name: Run tests
+        env:
+          NODE_ENV: test
+          TEST_MONGO_URI: mongodb://localhost:27017/test_shorthand
+          MONGO_URI: mongodb://localhost:27017/test_shorthand
         run: npm test -- --passWithNoTests
 
       - name: Generate test coverage
+        env:
+          NODE_ENV: test
+          TEST_MONGO_URI: mongodb://localhost:27017/test_shorthand
+          MONGO_URI: mongodb://localhost:27017/test_shorthand
         run: npm run test:coverage
         continue-on-error: true
 
