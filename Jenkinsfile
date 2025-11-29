@@ -93,10 +93,10 @@ pipeline {
                 script {
                     echo "🐳 Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                     def image
-                    if (DOCKER_REGISTRY) {
+                    if (env.DOCKER_REGISTRY) {
                         image = docker.build(
-                            "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}",
-                            "--tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest ."
+                            "${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:${env.DOCKER_TAG}",
+                            "--tag ${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest ."
                         )
                     } else {
                         image = docker.build(
@@ -113,14 +113,14 @@ pipeline {
             when {
                 allOf {
                     branch 'main'
-                    expression { return DOCKER_REGISTRY != '' }
+                    expression { return env.DOCKER_REGISTRY != '' }
                 }
             }
             steps {
                 script {
                     docker.withRegistry('https://index.docker.io/v1/', 'dockerhub-credentials') {
-                        docker.image("${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}").push()
-                        docker.image("${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest").push()
+                        docker.image("${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:${env.DOCKER_TAG}").push()
+                        docker.image("${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest").push()
                         echo "✅ Images pushed to Docker Hub"
                     }
                 }
@@ -209,7 +209,7 @@ pipeline {
                 Build: #${env.BUILD_NUMBER}
                 Commit: ${env.GIT_COMMIT_SHORT}
                 Branch: ${env.BRANCH_NAME}
-                Image: ${DOCKER_REGISTRY ? "${DOCKER_REGISTRY}/" : ""}${DOCKER_IMAGE}:${DOCKER_TAG}
+                Image: ${env.DOCKER_REGISTRY ? "${env.DOCKER_REGISTRY}/" : ""}${DOCKER_IMAGE}:${DOCKER_TAG}
                 
                 Services:
                 - Backend: http://localhost:3000
