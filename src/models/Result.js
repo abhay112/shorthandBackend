@@ -11,10 +11,6 @@ const resultSchema = new mongoose.Schema({
     ref: 'Batch',
     required: true 
   },
-  shiftId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shift'
-  },
   testId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Test',
@@ -90,41 +86,23 @@ const resultSchema = new mongoose.Schema({
   attemptNumber: { 
     type: Number, 
     required: true,
-    min: 1,
-    max: 3 
+    min: 1
+    // No max constraint - validated by TestSession.maxRetakes instead
   },
   isRetake: { 
     type: Boolean, 
     default: false 
   },
   
-  // Detailed mistakes tracking
-  mistakes: [
-    {
-      word: String,
-      expected: String,
-      typed: String,
-      position: Number,
-      timestamp: Date
-    }
-  ],
+  // Detailed mistakes tracking (stored as JSON in Prisma)
+  mistakes: {
+    type: mongoose.Schema.Types.Mixed
+  },
   
-  // Stenography-specific errors
-  stenographyErrors: [
-    {
-      type: {
-        type: String,
-        enum: ['substitution', 'omission', 'insertion', 'transposition', 'punctuation']
-      },
-      original: String,
-      typed: String,
-      position: Number,
-      severity: {
-        type: String,
-        enum: ['minor', 'major', 'critical']
-      }
-    }
-  ],
+  // Stenography-specific errors (stored as JSON in Prisma)
+  stenographyErrors: {
+    type: mongoose.Schema.Types.Mixed
+  },
   
   // Test session information
   sessionId: { 
@@ -159,6 +137,8 @@ const resultSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   }
+}, {
+  collection: 'results'
 });
 
 // Update the updatedAt field before saving
@@ -167,12 +147,14 @@ resultSchema.pre('save', function(next) {
   next();
 });
 
-// Indexes for better query performance
+// Indexes matching Prisma schema
 resultSchema.index({ studentId: 1, testId: 1 });
 resultSchema.index({ batchId: 1, testId: 1 });
 resultSchema.index({ studentId: 1, batchId: 1 });
 resultSchema.index({ submittedAt: -1 });
 resultSchema.index({ wpm: -1 });
 resultSchema.index({ accuracy: -1 });
+resultSchema.index({ rank: -1 });
+resultSchema.index({ testId: 1, batchId: 1, wpm: -1, accuracy: -1 });
 
 export default mongoose.model('Result', resultSchema);

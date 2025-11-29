@@ -60,7 +60,8 @@ const getPeriodDateRange = (period) => {
   return { startDate, endDate: now };
 };
 
-// Helper function to get period start date
+// Helper function to get period start date (unused - kept for potential future use)
+// eslint-disable-next-line no-unused-vars
 const getPeriodStart = (period) => {
   const now = new Date();
   if (period === 'week') {

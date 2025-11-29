@@ -3,7 +3,7 @@ import logger from '../utils/logger.js';
 /**
  * Global error handler middleware
  */
-export const errorMiddleware = (error, req, res, next) => {
+export const errorMiddleware = (error, req, res, _next) => {
   let { statusCode = 500, message } = error;
 
   // Handle known Mongoose/JWT errors

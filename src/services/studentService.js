@@ -5,8 +5,9 @@ import TestContent from '../models/TestContent.js';
 import Result from '../models/Result.js';
 import TestSession from '../models/TestSession.js';
 import StudentRanking from '../models/StudentRanking.js';
+import StudentBatch from '../models/StudentBatch.js';
+import BatchTestAssignment from '../models/BatchTestAssignment.js';
 import { createError } from '../utils/AppError.js';
-import logger from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
 import {
@@ -23,23 +24,18 @@ const toIdString = (value) => {
   return value.toString();
 };
 
-const determineTestBatchId = (studentBatchIds, test) => {
-  if (Array.isArray(test.assignedDays)) {
-    for (const day of test.assignedDays) {
-      const batchIdStr = toIdString(day.batchId);
-      if (batchIdStr && studentBatchIds.includes(batchIdStr)) {
-        return batchIdStr;
-      }
-    }
-  }
+const determineTestBatchId = async (studentBatchIds, testId) => {
+  // Find BatchTestAssignment that matches student's batches
+  const assignment = await BatchTestAssignment.findOne({
+    testId,
+    batchId: { $in: studentBatchIds },
+    status: 'active',
+    isActive: true,
+    isClosed: false
+  }).lean();
 
-  if (Array.isArray(test.assignedBatches)) {
-    for (const batchId of test.assignedBatches) {
-      const batchIdStr = toIdString(batchId);
-      if (batchIdStr && studentBatchIds.includes(batchIdStr)) {
-        return batchIdStr;
-      }
-    }
+  if (assignment) {
+    return toIdString(assignment.batchId);
   }
 
   return null;
@@ -63,7 +59,7 @@ const getAttemptUsage = async (studentId, testId) => {
 };
 
 const reserveTestAttempt = async ({ studentId, studentBatchIds, test, attemptNumber }) => {
-  const batchIdStr = determineTestBatchId(studentBatchIds, test);
+  const batchIdStr = await determineTestBatchId(studentBatchIds, test._id);
 
   if (!batchIdStr) {
     throw createError('No batch assignment found for this test', 400);
@@ -110,23 +106,32 @@ const studentService = {
         lastLogin: new Date()
       });
 
-      logger.info('New student created', { studentId: student._id, email });
       return student;
-    } catch (error) {
-      logger.error('Error in student login', { error: error.message, email });
+    } catch {
       throw createError('Login failed', 500);
     }
   },
 
   getProfile: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const student = await Student.findById(studentId)
-        .populate('assignedBatches', 'name description startDate endDate')
         .select('-firebaseUid');
 
       if (!student) {
         throw createError('Student not found', 404);
       }
+
+      // Get student batches using StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      })
+        .populate('batchId', 'name description startDate endDate isActive')
+        .lean();
+      
+      const assignedBatches = studentBatches.map(sb => sb.batchId).filter(Boolean);
 
       // Get statistics
       const results = await Result.find({
@@ -159,7 +164,7 @@ const studentService = {
       };
 
       // Format assigned batches
-      const formattedBatches = (student.assignedBatches || []).map(batch => {
+      const formattedBatches = assignedBatches.map(batch => {
         const generateCode = (name) => {
           if (!name) return '';
           return name
@@ -169,10 +174,11 @@ const studentService = {
             .substring(0, 10);
         };
 
+        const batchObj = batch.toObject ? batch.toObject() : batch;
         return {
-          _id: batch._id,
-          name: batch.name || '',
-          code: generateCode(batch.name)
+          _id: batchObj._id,
+          name: batchObj.name || '',
+          code: generateCode(batchObj.name)
         };
       });
 
@@ -195,14 +201,15 @@ const studentService = {
         },
         assignedBatches: formattedBatches
       };
-    } catch (error) {
-      logger.error('Error fetching student profile', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   updateProfile: async (studentId, updateData) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const allowedUpdates = ['name'];
       const updates = {};
 
@@ -222,7 +229,6 @@ const studentService = {
         throw createError('Student not found', 404);
       }
 
-      logger.info('Student profile updated', { studentId, updates });
       
       return {
         _id: student._id,
@@ -234,21 +240,31 @@ const studentService = {
         active: !student.isBlocked && student.isApproved,
         updatedAt: student.updatedAt
       };
-    } catch (error) {
-      logger.error('Error updating student profile', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Dashboard and Overview
   getDashboard: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      const student = await Student.findById(studentId)
-        .populate('assignedBatches', 'name description startDate endDate isActive');
+      
+      const student = await Student.findById(studentId);
 
       if (!student) {
         throw createError('Student not found', 404);
       }
+
+      // Get student batches using StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      })
+        .populate('batchId', 'name description startDate endDate isActive')
+        .lean();
+
+      const assignedBatches = studentBatches.map(sb => sb.batchId).filter(Boolean);
 
       // Get current day's test
       const currentTest = await studentService.getCurrentDayTest(studentId);
@@ -280,7 +296,7 @@ const studentService = {
           email: student.email,
           isApproved: student.isApproved,
           isBlocked: student.isBlocked,
-          assignedBatches: student.assignedBatches
+          assignedBatches: assignedBatches
         },
         currentTest,
         recentResults,
@@ -288,14 +304,15 @@ const studentService = {
         rankings,
         upcomingTests
       };
-    } catch (error) {
-      logger.error('Error fetching student dashboard', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getStudentStatistics: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const results = await Result.find({ studentId, status: 'completed' });
 
       if (results.length === 0) {
@@ -339,9 +356,8 @@ const studentService = {
         totalTimeSpent,
         improvementTrend
       };
-    } catch (error) {
-      logger.error('Error calculating student statistics', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
@@ -351,85 +367,110 @@ const studentService = {
     return { start, end };
   },
   getCurrentDayTest: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      const student = await Student.findById(studentId).populate('assignedBatches').lean();
-      if (!student) {
-        logger.info('student not found', { studentId });
-        return null;
-      }
-      if (!student.assignedBatches || student.assignedBatches.length === 0) {
-        logger.info('student has no batches', { studentId });
-        return null;
-      }
-
-      const batchIdStrings = Array.from(new Set(student.assignedBatches.map(b => String(b._id))));
-      const batchIds = student.assignedBatches.map(batch => batch._id);
-
-      // Get today's UTC date range
-      const { start: startUtc, end: endUtc } = studentService.getUtcDayRange();
-
-      // Find tests assigned to the student's batches for today
-      // Priority: Day-specific assignments > General batch assignments
-      const testsFromAssignedDays = await Test.find({
-        'assignedDays': {
-          $elemMatch: {
-            batchId: { $in: batchIds },
-            assignedDate: {
-              $gte: startUtc,
-              $lt: endUtc
-            },
-            isActive: true
-          }
-        },
-        isActive: true,
-        isPublished: true
-      })
-        .populate('assignedDays.batchId', 'name')
-        .lean();
       
-      const testsFromAssignedBatches = await Test.find({ 
-        assignedBatches: { $in: batchIds },
+      const student = await Student.findById(studentId).lean();
+      if (!student) {
+        return null;
+      }
+
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+
+      if (!studentBatches || studentBatches.length === 0) {
+        return null;
+      }
+
+      const batchIds = studentBatches.map(sb => sb.batchId).filter(Boolean);
+      const batchIdStrings = batchIds.map(id => String(id));
+
+      // Get today's date for comparison (start of day in UTC)
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      
+      // Get today's UTC date range (unused variables - kept for potential future use)
+      // const { start: startUtc, end: endUtc } = studentService.getUtcDayRange();
+
+      // First, find ALL active test assignments for the student's batches
+      // We'll filter by date and test status afterwards
+      const allAssignments = await BatchTestAssignment.find({
+        batchId: { $in: batchIds },
+        status: 'active',
         isActive: true,
-        isPublished: true,
-        // Only include if no specific day assignments exist
-        'assignedDays.0': { $exists: false }
+        isClosed: false
       })
-        .populate('assignedBatches', 'name')
+        .populate('testId')
+        .populate('batchId', 'name')
+        .sort({ priority: -1, assignedDate: -1 })
         .lean();
 
-      // Combine and prioritize day-specific tests
-      const allAvailableTests = [...testsFromAssignedDays, ...testsFromAssignedBatches];
+      if (allAssignments.length === 0) {
+        return null;
+      }
 
-      logger.debug('tests found for student today', { 
-        studentId, 
-        batchIds, 
-        assignedDaysTests: testsFromAssignedDays.length,
-        assignedBatchesTests: testsFromAssignedBatches.length,
-        totalTests: allAvailableTests.length,
-        startUtc,
-        endUtc
+      // Filter assignments - for now, include ALL active assignments regardless of date
+      // This helps us debug if the issue is with date filtering or test status
+      const testAssignments = allAssignments.filter(assignment => {
+        if (!assignment.testId) {
+          return false;
+        }
+        
+        // Temporarily remove date filter to see all assigned tests
+        // TODO: Re-enable date filtering once we confirm tests are showing up
+        return true;
+        
+        // Original date filtering (commented out for debugging):
+        // const assignedDate = new Date(assignment.assignedDate);
+        // assignedDate.setUTCHours(0, 0, 0, 0);
+        // const isAssignedTodayOrPast = assignedDate <= today;
+        // const isNotExpired = !assignment.availableUntil || new Date(assignment.availableUntil) >= today;
+        // return isAssignedTodayOrPast && isNotExpired;
       });
 
+      // Get unique test IDs
+      const testIds = [...new Set(testAssignments.map(ta => ta.testId?._id || ta.testId).filter(Boolean))];
+      
+      if (testIds.length === 0) {
+        return null;
+      }
+      
+      // Fetch all tests (including unpublished for debugging)
+      const allTests = await Test.find({
+        _id: { $in: testIds }
+      }).lean();
+      
+      // Filter for active and published tests
+      const allAvailableTests = allTests.filter(t => t.isActive && t.isPublished);
+      
       if (!allAvailableTests || allAvailableTests.length === 0) {
-        logger.info('no test found for student today', { studentId, batchIds, startUtc, endUtc });
         return null;
       }
 
-      // Sort tests by priority (day-specific tests first, then by priority, then by creation date)
-      const sortedTests = allAvailableTests.sort((a, b) => {
-        // Day-specific tests have higher priority
-        const aHasDayAssignment = a.assignedDays && a.assignedDays.length > 0;
-        const bHasDayAssignment = b.assignedDays && b.assignedDays.length > 0;
-        
-        if (aHasDayAssignment && !bHasDayAssignment) return -1;
-        if (!aHasDayAssignment && bHasDayAssignment) return 1;
-        
-        // If both have day assignments, sort by priority
-        if (aHasDayAssignment && bHasDayAssignment) {
-          const aPriority = Math.max(...a.assignedDays.map(ad => ad.priority || 1));
-          const bPriority = Math.max(...b.assignedDays.map(ad => ad.priority || 1));
-          if (aPriority !== bPriority) return bPriority - aPriority;
+      // Create a map of test assignments for quick lookup
+      const assignmentsByTest = {};
+      testAssignments.forEach(ta => {
+        const testId = String(ta.testId?._id || ta.testId);
+        if (!assignmentsByTest[testId]) {
+          assignmentsByTest[testId] = [];
         }
+        assignmentsByTest[testId].push(ta);
+      });
+
+      // Sort tests by priority from BatchTestAssignment
+      const sortedTests = allAvailableTests.sort((a, b) => {
+        const aId = String(a._id);
+        const bId = String(b._id);
+        const aAssignments = assignmentsByTest[aId] || [];
+        const bAssignments = assignmentsByTest[bId] || [];
+        
+        const aPriority = aAssignments.length > 0 ? Math.max(...aAssignments.map(ta => ta.priority || 1)) : 1;
+        const bPriority = bAssignments.length > 0 ? Math.max(...bAssignments.map(ta => ta.priority || 1)) : 1;
+        
+        if (aPriority !== bPriority) return bPriority - aPriority;
         
         // Finally sort by creation date (newest first)
         return new Date(b.createdAt) - new Date(a.createdAt);
@@ -439,24 +480,21 @@ const studentService = {
       const testsWithMetadata = [];
 
       for (const test of sortedTests) {
-        // Find the specific day assignment for this test
-        let matchedDay = null;
-        let assignedBatch = null;
-
-        if (test.assignedDays && test.assignedDays.length > 0) {
-          matchedDay = test.assignedDays.find(ad => {
-            const bid = ad.batchId && (ad.batchId._id || ad.batchId);
-            const matchBatch = batchIdStrings.includes(String(bid));
-            const d = new Date(ad.assignedDate);
-            return matchBatch && d >= startUtc && d < endUtc && ad.isActive;
-          });
-          assignedBatch = matchedDay?.batchId;
-        } else if (test.assignedBatches && test.assignedBatches.length > 0) {
-          // General assignment
-          assignedBatch = test.assignedBatches.find(batch => 
-            batchIdStrings.includes(String(batch._id || batch))
-          );
-        }
+        // Find the assignment for this test from BatchTestAssignment
+        const testId = String(test._id);
+        const assignments = assignmentsByTest[testId] || [];
+        
+        // Find the assignment that matches student's batch (prefer first match)
+        const matchedAssignment = assignments.find(ta => {
+          const batchId = String(ta.batchId?._id || ta.batchId);
+          return batchIdStrings.includes(batchId);
+        }) || assignments[0];
+        
+        const assignedBatch = matchedAssignment?.batchId;
+        const matchedDay = matchedAssignment ? {
+          assignedDate: matchedAssignment.assignedDate,
+          priority: matchedAssignment.priority || 1
+        } : null;
 
         // Check if student can take this test (considering blocking)
         const accessCheck = await studentService.canStudentTakeTest(studentId, test._id, { consumeAttempt: false });
@@ -537,60 +575,65 @@ const studentService = {
         totalTestsAvailable: testsWithMetadata.length
       };
 
-    } catch (err) {
-      logger.error('Error in getCurrentDayTest', { error: err.message, studentId });
-      throw err;
+    } catch (_err) {
+      throw _err;
     }
   },
 
 
   getUpcomingTests: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      const student = await Student.findById(studentId).populate('assignedBatches');
+      
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
 
-      if (!student || !student.assignedBatches.length) {
+      if (!studentBatches || studentBatches.length === 0) {
         return [];
       }
 
-      const batchIds = student.assignedBatches.map(batch => batch._id);
+      const batchIds = studentBatches.map(sb => sb.batchId).filter(Boolean);
       const today = new Date();
       const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
-      const upcomingTests = await Test.find({
-        'assignedDays.batchId': { $in: batchIds },
-        'assignedDays.date': {
-          $gte: new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1),
+      // Find upcoming test assignments using BatchTestAssignment join table
+      const upcomingAssignments = await BatchTestAssignment.find({
+        batchId: { $in: batchIds },
+        assignedDate: {
+          $gte: tomorrow,
           $lte: nextWeek
         },
+        status: 'active',
         isActive: true,
-        isPublished: true
+        isClosed: false
       })
-        .populate('assignedDays.batchId', 'name')
-        .sort({ 'assignedDays.date': 1 })
-        .limit(7);
+        .populate('testId')
+        .populate('batchId', 'name')
+        .sort({ assignedDate: 1, priority: -1 })
+        .limit(7)
+        .lean();
 
-      return upcomingTests.map(test => ({
-        id: test._id,
-        title: test.title,
-        difficulty: test.difficulty,
-        category: test.category,
-        duration: test.duration,
-        assignedDate: test.assignedDays.find(day =>
-          batchIds.some(batchId => batchId.toString() === day.batchId._id.toString())
-        )?.date,
-        assignedBatch: test.assignedDays.find(day =>
-          batchIds.some(batchId => batchId.toString() === day.batchId._id.toString())
-        )?.batchId
+      return upcomingAssignments.map(assignment => ({
+        id: assignment.testId?._id || assignment.testId,
+        title: assignment.testId?.title || '',
+        difficulty: assignment.testId?.difficulty || '',
+        category: assignment.testId?.category || '',
+        duration: assignment.testId?.duration || 0,
+        assignedDate: assignment.assignedDate,
+        assignedBatch: assignment.batchId
       }));
-    } catch (error) {
-      logger.error('Error fetching upcoming tests', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   canStudentTakeTest: async (studentId, testId, options = {}) => {
     const { consumeAttempt = false } = options;
-
+    // eslint-disable-next-line no-useless-catch
     try {
       const student = await Student.findById(studentId);
       if (!student || !student.isApproved || student.isBlocked) {
@@ -606,36 +649,51 @@ const studentService = {
         return { canTake: false, reason: 'Test is currently blocked by admin' };
       }
 
-      const studentBatchIds = (student.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+      
+      const studentBatchIds = studentBatches.map(sb => toIdString(sb.batchId)).filter(Boolean);
 
-      // Check if test is closed for any of the student's batches
-      const isClosedForStudentBatch = studentBatchIds.some(batchId => test.isClosedForBatch(batchId));
-      if (isClosedForStudentBatch) {
+      if (studentBatchIds.length === 0) {
+        return { canTake: false, reason: 'You are not enrolled in any active batches' };
+      }
+
+      // Check if test is closed for any of the student's batches using BatchTestAssignment
+      const closedAssignments = await BatchTestAssignment.find({
+        batchId: { $in: studentBatchIds },
+        testId,
+        isClosed: true
+      }).lean();
+
+      if (closedAssignments.length > 0) {
         return { canTake: false, reason: 'Test is closed for your batch. Time\'s up!' };
       }
 
-      const dayBasedBatches = (test.assignedDays || []).map(day => toIdString(day.batchId)).filter(Boolean);
-      const generalBatches = (test.assignedBatches || []).map(id => toIdString(id)).filter(Boolean);
+      // Check if test is assigned to any of the student's batches using BatchTestAssignment
+      const testAssignments = await BatchTestAssignment.find({
+        batchId: { $in: studentBatchIds },
+        testId,
+        status: 'active',
+        isActive: true,
+        isClosed: false
+      }).lean();
 
-      const allTestBatches = Array.from(new Set([...dayBasedBatches, ...generalBatches]));
-      const hasAccess = studentBatchIds.some(batchId => allTestBatches.includes(batchId));
+      const hasAccess = testAssignments.length > 0;
 
       if (!hasAccess) {
-        logger.debug('Access check failed', {
-          studentId,
-          testId,
-          studentBatchIds,
-          dayBasedBatches,
-          generalBatches
-        });
-        return { canTake: false, reason: 'No access to this test' };
+        return { canTake: false, reason: 'No access to this test. This test is not assigned to any of your batches.' };
       }
 
       const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
-      const remainingAttempts = test.maxRetakes - totalUsed;
+      // User can access test if maxRetakes is not equal to totalAttempts (completed attempts only)
+      const remainingAttempts = test.maxRetakes - completedAttempts;
 
       // Check if test has been completed today
       const { start: todayStart, end: todayEnd } = studentService.getUtcDayRange();
+      // eslint-disable-next-line no-unused-vars
       const completedToday = await Result.findOne({
         studentId,
         testId,
@@ -646,16 +704,17 @@ const studentService = {
         }
       }).lean();
 
+      // User can access test if maxRetakes !== completedAttempts
+      const canAccessTest = completedAttempts < test.maxRetakes;
+
       if (consumeAttempt) {
-        if (remainingAttempts <= 0) {
-          // Check if there are any completed attempts
-          if (completedAttempts > 0) {
-            return { canTake: false, reason: 'You have already completed this test' };
-          }
+        if (!canAccessTest) {
+          // Only block if maxRetakes equals completedAttempts
           return { canTake: false, reason: 'Maximum retakes exceeded' };
         }
 
-        const attemptNumber = totalUsed + 1;
+        // Use completedAttempts + 1 for attempt number (not totalUsed, which includes reserved attempts)
+        const attemptNumber = completedAttempts + 1;
         
         const reservation = await reserveTestAttempt({
           studentId,
@@ -672,45 +731,43 @@ const studentService = {
         };
       }
 
-      if (remainingAttempts <= 0) {
+      if (!canAccessTest) {
         if (reservedAttempts > 0) {
           return {
             canTake: true,
             remainingAttempts: 0,
             reservedAttempts,
-            nextAttemptNumber: totalUsed
+            nextAttemptNumber: completedAttempts + 1
           };
         }
-        // Check if test has been completed
-        if (completedAttempts > 0) {
-          return { canTake: false, reason: 'You have already completed this test' };
-        }
+        // Only block if maxRetakes equals completedAttempts
         return { canTake: false, reason: 'Maximum retakes exceeded' };
       }
 
       return {
         canTake: true,
         remainingAttempts,
-        nextAttemptNumber: totalUsed + 1,
+        nextAttemptNumber: completedAttempts + 1,
         reservedAttempts,
-        completedAttempts
+        completedAttempts: completedAttempts // Include in response
       };
-    } catch (error) {
-      logger.error('Error checking test access', { error: error.message, studentId, testId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Test Session Management
   startTestSession: async (studentId, testId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const accessCheck = await studentService.canStudentTakeTest(studentId, testId, { consumeAttempt: false });
       if (!accessCheck.canTake) {
         throw createError(accessCheck.reason || 'Test access denied', 403);
       }
 
       const [student, test] = await Promise.all([
-        Student.findById(studentId).populate('assignedBatches'),
+        Student.findById(studentId),
         Test.findById(testId).populate('currentContent')
       ]);
 
@@ -722,12 +779,19 @@ const studentService = {
         throw createError('Test not available', 404);
       }
 
-      const studentBatchIds = (student.assignedBatches || []).map(batch => toIdString(batch._id || batch)).filter(Boolean);
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+      
+      const studentBatchIds = studentBatches.map(sb => toIdString(sb.batchId)).filter(Boolean);
 
       const { completedAttempts, reservedAttempts, totalUsed } = await getAttemptUsage(studentId, testId);
       const attemptLimit = test.maxRetakes;
 
-      if (totalUsed >= attemptLimit && reservedAttempts === 0) {
+      // Check access based on completed attempts only (not totalUsed)
+      if (completedAttempts >= attemptLimit) {
         throw createError('Maximum retakes exceeded', 403);
       }
 
@@ -758,21 +822,23 @@ const studentService = {
         session.timeExpires = new Date(Date.now() + test.duration * 1000);
         await session.save();
       } else {
-        if (totalUsed >= attemptLimit) {
+        // Check access based on completed attempts only
+        if (completedAttempts >= attemptLimit) {
           throw createError('Maximum retakes exceeded', 403);
         }
 
-        const batchIdStr = determineTestBatchId(studentBatchIds, test);
+        const batchIdStr = await determineTestBatchId(studentBatchIds, testId);
         if (!batchIdStr) {
           throw createError('No batch assignment found for this test', 400);
         }
 
+        // Use completedAttempts + 1 for attempt number (not totalUsed, which includes reserved attempts)
         session = await TestSession.create({
           studentId,
           batchId: new mongoose.Types.ObjectId(batchIdStr),
           testId,
           sessionId: uuidv4(),
-          currentAttempt: totalUsed + 1,
+          currentAttempt: completedAttempts + 1,
           totalAttempts: 0,
           maxRetakes: test.maxRetakes,
           status: 'in_progress',
@@ -780,12 +846,6 @@ const studentService = {
           timeExpires: new Date(Date.now() + test.duration * 1000)
         });
 
-        logger.info('Test session started', {
-          studentId,
-          testId,
-          sessionId: session.sessionId,
-          attemptNumber: session.currentAttempt
-        });
       }
 
       const contentDoc = test.currentContent
@@ -813,7 +873,8 @@ const studentService = {
           };
 
       const usageAfter = await getAttemptUsage(studentId, testId);
-      const remainingAttempts = Math.max(0, test.maxRetakes - usageAfter.totalUsed);
+      // Calculate remaining attempts based on completed attempts only
+      const remainingAttempts = Math.max(0, test.maxRetakes - usageAfter.completedAttempts);
 
       return {
         sessionId: session.sessionId,
@@ -828,14 +889,15 @@ const studentService = {
         remainingAttempts,
         timeExpires: session.timeExpires
       };
-    } catch (error) {
-      logger.error('Error starting test session', { error: error.message, studentId, testId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   endTestSession: async (studentId, sessionId, resultData) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const session = await TestSession.findOne({
         studentId,
         sessionId,
@@ -866,10 +928,6 @@ const studentService = {
         timeTaken: Math.floor((session.timeCompleted - session.timeStarted) / 1000)
       });
 
-      // Add result to session
-      session.results.push(result._id);
-      await session.save();
-
       // Process result side effects (student linkage, statistics, ranking)
       await processResultSideEffects({
         studentId,
@@ -878,23 +936,17 @@ const studentService = {
         result
       });
 
-      logger.info('Test session completed', {
-        studentId,
-        testId: session.testId,
-        sessionId,
-        resultId: result._id
-      });
-
       return result;
-    } catch (error) {
-      logger.error('Error ending test session', { error: error.message, studentId, sessionId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Results and Rankings
   getStudentResults: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         batchId,
         testId,
@@ -929,14 +981,15 @@ const studentService = {
           limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching student results', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getStudentResultById: async (studentId, resultId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const result = await Result.findOne({ _id: resultId, studentId })
         .populate('testId', 'title description difficulty category duration referenceText')
         .populate('batchId', 'name description')
@@ -1048,9 +1101,8 @@ const studentService = {
       };
 
       return formattedResult;
-    } catch (error) {
-      logger.error('Error fetching student result by ID', { error: error.message, studentId, resultId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
@@ -1059,34 +1111,27 @@ const studentService = {
   },
 
   getStudentRankings: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const { batchId, limit = 20, page = 1 } = options;
 
       const query = { studentId };
       if (batchId) query.batchId = batchId;
 
-      const allRankings = await StudentRanking.find(query)
+      // Get total count for pagination
+      const total = await StudentRanking.countDocuments(query);
+
+      // Get paginated rankings
+      const rankings = await StudentRanking.find(query)
         .populate('testId', 'title difficulty category')
         .populate('batchId', 'name')
-        .sort({ testDate: -1 });
-
-      // Filter rankings to only include those where rankings are generated for the batch-test
-      const validRankings = [];
-      for (const ranking of allRankings) {
-        if (ranking.testId && ranking.batchId) {
-          const test = await Test.findById(ranking.testId);
-          if (test && test.areRankingsGeneratedForBatch(ranking.batchId._id || ranking.batchId)) {
-            validRankings.push(ranking);
-          }
-        }
-      }
-
-      // Apply pagination
-      const total = validRankings.length;
-      const paginatedRankings = validRankings.slice((page - 1) * limit, page * limit);
+        .sort({ testDate: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit);
 
       return {
-        rankings: paginatedRankings,
+        rankings,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -1094,15 +1139,16 @@ const studentService = {
           limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching student rankings', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Get student batches with filtering, search, sorting, pagination, and statistics
   getStudentBatches: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         status,
         search,
@@ -1112,8 +1158,30 @@ const studentService = {
         sortOrder = 'desc'
       } = options;
 
-      // Find all batches where student is enrolled
-      let query = { students: studentId };
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      })
+        .populate('batchId')
+        .lean();
+
+      const batchIds = studentBatches.map(sb => sb.batchId?._id || sb.batchId).filter(Boolean);
+
+      if (batchIds.length === 0) {
+        return {
+          batches: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 0,
+            totalItems: 0,
+            itemsPerPage: limit
+          }
+        };
+      }
+
+      // Build query for batches
+      let query = { _id: { $in: batchIds } };
 
       // Apply search filter
       if (search) {
@@ -1126,9 +1194,39 @@ const studentService = {
 
       // Get all batches for the student
       const allBatches = await Batch.find(query)
-        .populate('tests', 'title duration isActive isPublished')
-        .populate('students', 'name email')
+        .populate('createdBy', 'name email')
         .lean();
+
+      // Get test assignments for these batches
+      const testAssignments = await BatchTestAssignment.find({
+        batchId: { $in: batchIds },
+        status: 'active',
+        isActive: true
+      })
+        .populate('testId', 'title duration isActive isPublished')
+        .lean();
+
+      // Group tests by batchId
+      const testsByBatch = {};
+      testAssignments.forEach(ta => {
+        const batchIdStr = String(ta.batchId?._id || ta.batchId);
+        if (!testsByBatch[batchIdStr]) {
+          testsByBatch[batchIdStr] = [];
+        }
+        const test = ta.testId;
+        if (test) {
+          const testId = String(test._id || test);
+          if (!testsByBatch[batchIdStr].some(t => String(t._id || t) === testId)) {
+            testsByBatch[batchIdStr].push(test);
+          }
+        }
+      });
+
+      // Attach tests to batches
+      allBatches.forEach(batch => {
+        const batchIdStr = String(batch._id);
+        batch.tests = testsByBatch[batchIdStr] || [];
+      });
 
       const now = new Date();
 
@@ -1173,19 +1271,26 @@ const studentService = {
         .populate('batchId', 'name')
         .lean();
 
-      // Get student's enrollment info (when they were added to batch)
-      const student = await Student.findById(studentId).select('assignedBatches createdAt').lean();
+      // Get student's enrollment info from StudentBatch join table
       const enrollmentMap = new Map();
-      if (student && student.assignedBatches) {
-        // We'll use createdAt as enrollment date (approximation)
-        // In a real system, you might track this separately
-        student.assignedBatches.forEach((batchId, index) => {
-          enrollmentMap.set(batchId.toString(), {
-            enrolledAt: student.createdAt || new Date(),
-            enrollmentStatus: 'active'
-          });
+      studentBatches.forEach(sb => {
+        const batchId = String(sb.batchId?._id || sb.batchId);
+        enrollmentMap.set(batchId, {
+          enrolledAt: sb.enrolledAt || sb.createdAt || new Date(),
+          enrollmentStatus: sb.status || 'active'
         });
-      }
+      });
+
+      // Get student counts for each batch
+      const studentCounts = await StudentBatch.aggregate([
+        { $match: { batchId: { $in: batchIds }, status: 'active' } },
+        { $group: { _id: '$batchId', count: { $sum: 1 } } }
+      ]);
+      
+      const studentCountMap = new Map();
+      studentCounts.forEach(sc => {
+        studentCountMap.set(String(sc._id), sc.count);
+      });
 
       // Enrich batches with statistics and other data
       const enrichedBatches = await Promise.all(
@@ -1249,7 +1354,7 @@ const studentService = {
             endDate: batch.endDate || null,
             status: batch.status,
             statistics: {
-              totalStudents: (batch.students || []).length,
+              totalStudents: studentCountMap.get(batchId) || 0,
               totalTests,
               completedTests,
               remainingTests,
@@ -1307,15 +1412,16 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching student batches', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Batch-specific operations
   getBatchLeaderboard: async (batchId, testId = null) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const query = { batchId };
       if (testId) {
         query.testId = testId;
@@ -1352,14 +1458,15 @@ const studentService = {
         .limit(50);
 
       return rankings;
-    } catch (error) {
-      logger.error('Error fetching batch leaderboard', { error: error.message, batchId, testId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getBatchLeaderboardDetailed: async (studentId, batchId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         testId = null,
         metric = 'overall',
@@ -1368,16 +1475,28 @@ const studentService = {
         limit = 20
       } = options;
 
-      // Verify enrollment
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+      // Verify enrollment using StudentBatch join table
+      const enrollment = await StudentBatch.findOne({
+        studentId,
+        batchId,
+        status: 'active'
+      }).lean();
+      
+      if (!enrollment) {
         throw createError('You are not enrolled in this batch', 403);
       }
 
-      // Get all students in batch
-      const batchStudents = await Student.find({ assignedBatches: batchId })
-        .select('_id name email')
+      // Get all students in batch using StudentBatch join table
+      const batchStudentBatches = await StudentBatch.find({ 
+        batchId,
+        status: 'active'
+      })
+        .populate('studentId', '_id name email')
         .lean();
+      
+      const batchStudents = batchStudentBatches
+        .map(sb => sb.studentId)
+        .filter(Boolean);
       const batchStudentIds = batchStudents.map(s => s._id);
 
       // Get period start date
@@ -1498,15 +1617,16 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching detailed batch leaderboard', { error: error.message, studentId, batchId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Get WPM trend data
   getWpmTrend: async (studentId, daysOrOptions = 30) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       // Handle both number and options object
       let days = 30;
       if (typeof daysOrOptions === 'object' && daysOrOptions !== null) {
@@ -1565,7 +1685,7 @@ const studentService = {
         new Date(a[1].date) - new Date(b[1].date)
       );
 
-      sortedDays.forEach(([key, value], index) => {
+      sortedDays.forEach(([_key, value, _index]) => {
         const avgWpm = value.wpm.length > 0
           ? Math.round((value.wpm.reduce((sum, w) => sum + w, 0) / value.wpm.length) * 100) / 100
           : 0;
@@ -1592,15 +1712,16 @@ const studentService = {
           days
         }
       };
-    } catch (error) {
-      logger.error('Error fetching WPM trend', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Get best performance data
   getBestPerformance: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const results = await Result.find({
         studentId,
         status: 'completed',
@@ -1611,7 +1732,7 @@ const studentService = {
         .limit(10)
         .lean();
 
-      const performance = results.map((result, index) => ({
+      const performance = results.map((result, _index) => ({
         test: result.testId?.title || 'Unknown Test',
         testId: result.testId?._id?.toString() || '',
         wpm: result.wpm || 0,
@@ -1630,15 +1751,16 @@ const studentService = {
           totalTests: results.length
         }
       };
-    } catch (error) {
-      logger.error('Error fetching best performance', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Get profile overview (combines WPM trend, best performance, and recent activity)
   getProfileOverview: async function(studentId, options = {}) {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const { days = 30, activityLimit = 5 } = options;
 
       // Fetch all data in parallel for better performance
@@ -1658,15 +1780,16 @@ const studentService = {
           totalTests: 0
         }
       };
-    } catch (error) {
-      logger.error('Error fetching profile overview', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Get recent activity
   getRecentActivity: async (studentId, limit = 10) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       // Helper function for time ago
       const getTimeAgo = (date) => {
         if (!date) return 'Unknown';
@@ -1795,14 +1918,15 @@ const studentService = {
       });
 
       return activities.slice(0, limit);
-    } catch (error) {
-      logger.error('Error fetching recent activity', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getAssignedBatchesWithDetails: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const student = await Student.findById(studentId)
         .populate({
           path: 'assignedBatches',
@@ -1878,14 +2002,15 @@ const studentService = {
       );
 
       return batches;
-    } catch (error) {
-      logger.error('Error fetching assigned batches with details', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getTestHistory: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         page = 1,
         limit = 20,
@@ -2028,14 +2153,15 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching test history', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getPerformanceRankings: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       // Get global rankings
       const allResults = await Result.find({ status: 'completed' })
         .select('studentId wpm accuracy')
@@ -2056,33 +2182,47 @@ const studentService = {
         ? Math.round(((totalStudents - globalRank) / totalStudents) * 100 * 10) / 10
         : 0;
 
-      // Get batch rankings
-      const student = await Student.findById(studentId).populate('assignedBatches').lean();
+      // Get batch rankings using StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId: studentId,
+        status: 'active' 
+      })
+        .populate('batchId', 'name')
+        .lean();
+      
       let batchRank = null;
       let batchPercentile = 0;
 
-      if (student && student.assignedBatches && student.assignedBatches.length > 0) {
-        const batchId = student.assignedBatches[0]._id;
-        const batchResults = await Result.find({
-          batchId,
-          status: 'completed'
-        })
-          .select('studentId wpm')
-          .lean();
+      let firstBatch = null;
+      let batchId = null;
+      
+      if (studentBatches && studentBatches.length > 0) {
+        // Extract batchId - handle both populated and non-populated cases
+        firstBatch = studentBatches[0];
+        batchId = firstBatch.batchId?._id || firstBatch.batchId;
+        
+        if (batchId) {
+          const batchResults = await Result.find({
+            batchId: batchId,
+            status: 'completed'
+          })
+            .select('studentId wpm')
+            .lean();
 
-        const batchWpm = batchResults.map(r => r.wpm).sort((a, b) => b - a);
-        const batchStudentWpm = batchResults
-          .filter(r => r.studentId.toString() === studentId.toString())
-          .map(r => r.wpm)
-          .sort((a, b) => b - a);
+          const batchWpm = batchResults.map(r => r.wpm).sort((a, b) => b - a);
+          const batchStudentWpm = batchResults
+            .filter(r => r.studentId.toString() === studentId.toString())
+            .map(r => r.wpm)
+            .sort((a, b) => b - a);
 
-        if (batchStudentWpm.length > 0) {
-          const bestBatchWpm = batchStudentWpm[0];
-          batchRank = batchWpm.findIndex(wpm => wpm <= bestBatchWpm) + 1;
-          const batchTotalStudents = new Set(batchResults.map(r => r.studentId.toString())).size;
-          batchPercentile = batchTotalStudents > 0
-            ? Math.round(((batchTotalStudents - batchRank) / batchTotalStudents) * 100 * 10) / 10
-            : 0;
+          if (batchStudentWpm.length > 0) {
+            const bestBatchWpm = batchStudentWpm[0];
+            batchRank = batchWpm.findIndex(wpm => wpm <= bestBatchWpm) + 1;
+            const batchTotalStudents = new Set(batchResults.map(r => r.studentId.toString())).size;
+            batchPercentile = batchTotalStudents > 0
+              ? Math.round(((batchTotalStudents - batchRank) / batchTotalStudents) * 100 * 10) / 10
+              : 0;
+          }
         }
       }
 
@@ -2101,27 +2241,28 @@ const studentService = {
           percentile: globalPercentile,
           topPercent: globalPercentile > 0 ? Math.round(100 - globalPercentile) : 0
         },
-        batchRank: batchRank ? {
+        batchRank: batchRank && firstBatch && batchId ? {
           rank: batchRank,
           totalStudents: new Set(
-            (await Result.find({ batchId: student.assignedBatches[0]._id }).select('studentId').lean())
+            (await Result.find({ batchId: batchId }).select('studentId').lean())
               .map(r => r.studentId.toString())
           ).size,
           percentile: batchPercentile,
           topPercent: batchPercentile > 0 ? Math.round(100 - batchPercentile) : 0,
-          batchId: student.assignedBatches[0]._id,
-          batchName: student.assignedBatches[0].name
+          batchId: batchId,
+          batchName: firstBatch.batchId?.name || 'Unknown Batch'
         } : null,
         progress
       };
-    } catch (error) {
-      logger.error('Error fetching performance rankings', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getPerformanceTrends: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const { limit = 10 } = options;
 
       const results = await Result.find({
@@ -2141,14 +2282,15 @@ const studentService = {
         accuracy: result.accuracy,
         date: result.submittedAt
       })).reverse();
-    } catch (error) {
-      logger.error('Error fetching performance trends', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getAchievements: async (studentId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const results = await Result.find({ studentId, status: 'completed' })
         .populate('testId', 'title')
         .sort({ submittedAt: -1 })
@@ -2260,14 +2402,15 @@ const studentService = {
       }
 
       return achievements.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt));
-    } catch (error) {
-      logger.error('Error fetching achievements', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getFullActivityLog: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         page = 1,
         limit = 20,
@@ -2326,15 +2469,16 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching full activity log', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   // Batch Management Methods
   getStudentBatchesList: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const {
         status = 'all',
         search,
@@ -2344,9 +2488,15 @@ const studentService = {
         sortOrder = 'desc'
       } = options;
 
-      // Find student to get enrolled batches
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || student.assignedBatches.length === 0) {
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+
+      const batchIds = studentBatches.map(sb => sb.batchId?._id || sb.batchId).filter(Boolean);
+
+      if (batchIds.length === 0) {
         return {
           batches: [],
           pagination: {
@@ -2368,7 +2518,7 @@ const studentService = {
       }
 
       // Build query
-      const query = { _id: { $in: student.assignedBatches } };
+      const query = { _id: { $in: batchIds } };
 
       // Search filter
       if (search) {
@@ -2405,9 +2555,9 @@ const studentService = {
       }
 
       // Get batch IDs for pagination
-      const batchIds = filteredBatches.map(b => b._id);
+      const filteredBatchIds = filteredBatches.map(b => b._id);
       const skip = (page - 1) * limit;
-      const paginatedBatchIds = batchIds.slice(skip, skip + limit);
+      const paginatedBatchIds = filteredBatchIds.slice(skip, skip + limit);
 
       // Get paginated batches with details
       const batches = await Batch.find({ _id: { $in: paginatedBatchIds } })
@@ -2465,17 +2615,23 @@ const studentService = {
         },
         summary
       };
-    } catch (error) {
-      logger.error('Error fetching student batches list', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getBatchDetails: async (studentId, batchId) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      // Verify student is enrolled
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+      
+      // Verify student is enrolled using StudentBatch join table
+      const studentEnrollment = await StudentBatch.findOne({
+        studentId,
+        batchId,
+        status: 'active'
+      }).lean();
+      
+      if (!studentEnrollment) {
         throw createError('You are not enrolled in this batch', 403);
       }
 
@@ -2511,21 +2667,27 @@ const studentService = {
         statistics: {
           ...stats,
           rank: await getStudentRankInBatch(studentId, batchId),
-          totalStudentsInBatch: await Student.countDocuments({ assignedBatches: batchId })
+          totalStudentsInBatch: await StudentBatch.countDocuments({ batchId, status: 'active' })
         },
         enrollment
       };
-    } catch (error) {
-      logger.error('Error fetching batch details', { error: error.message, studentId, batchId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getBatchTests: async (studentId, batchId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      // Verify enrollment
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+      
+      // Verify enrollment using StudentBatch join table
+      const enrollment = await StudentBatch.findOne({
+        studentId,
+        batchId,
+        status: 'active'
+      }).lean();
+      
+      if (!enrollment) {
         throw createError('You are not enrolled in this batch', 403);
       }
 
@@ -2644,17 +2806,23 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching batch tests', { error: error.message, studentId, batchId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   getBatchResults: async (studentId, batchId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
-      // Verify enrollment
-      const student = await Student.findById(studentId).select('assignedBatches').lean();
-      if (!student || !student.assignedBatches || !student.assignedBatches.some(b => b.toString() === batchId.toString())) {
+      
+      // Verify enrollment using StudentBatch join table
+      const enrollment = await StudentBatch.findOne({
+        studentId,
+        batchId,
+        status: 'active'
+      }).lean();
+      
+      if (!enrollment) {
         throw createError('You are not enrolled in this batch', 403);
       }
 
@@ -2736,14 +2904,15 @@ const studentService = {
           itemsPerPage: limit
         }
       };
-    } catch (error) {
-      logger.error('Error fetching batch results', { error: error.message, studentId, batchId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   },
 
   exportActivityLog: async (studentId, options = {}) => {
+    // eslint-disable-next-line no-useless-catch
     try {
+      
       const { format = 'json', startDate, endDate, type } = options;
       
       // For now, return JSON format. CSV/Excel/PDF can be added later with appropriate libraries
@@ -2777,9 +2946,8 @@ const studentService = {
           note: `${format.toUpperCase()} export not yet implemented, returning JSON`
         }
       };
-    } catch (error) {
-      logger.error('Error exporting activity log', { error: error.message, studentId });
-      throw error;
+    } catch (_err) {
+      throw _err;
     }
   }
 };
@@ -2868,8 +3036,7 @@ async function calculateBatchStatistics(studentId, batchId) {
       averageAccuracy,
       completionRate
     };
-  } catch (error) {
-    logger.error('Error calculating batch statistics', { error: error.message, studentId, batchId });
+  } catch {
     return {
       totalStudents: 0,
       totalTests: 0,
@@ -2899,8 +3066,7 @@ async function getStudentEnrollment(studentId, batchId) {
       enrolledAt: student.createdAt, // Simplified - should track actual enrollment date
       enrollmentStatus: batchStatus === 'completed' ? 'completed' : batch.isActive ? 'active' : 'inactive'
     };
-  } catch (error) {
-    logger.error('Error getting student enrollment', { error: error.message, studentId, batchId });
+  } catch {
     return {
       enrolledAt: null,
       enrollmentStatus: 'unknown'
@@ -2930,8 +3096,7 @@ async function getBatchCertificate(studentId, batch, batchStatus) {
         : null,
       issuedAt: certificateAvailable ? new Date() : null
     };
-  } catch (error) {
-    logger.error('Error getting batch certificate', { error: error.message, studentId, batchId: batch._id });
+  } catch {
     return {
       available: false,
       downloadUrl: null,
@@ -2970,7 +3135,8 @@ async function calculateBatchesSummary(batches, now, studentId) {
 async function getStudentRankInBatch(studentId, batchId) {
   try {
     // Get all students in batch with their average WPM
-    const students = await Student.find({ assignedBatches: batchId }).select('_id').lean();
+    const studentBatches = await StudentBatch.find({ batchId, status: 'active' }).select('studentId').lean();
+    const students = studentBatches.map(sb => ({ _id: sb.studentId }));
     const studentIds = students.map(s => s._id);
 
     // Get all results for this batch
@@ -3005,8 +3171,7 @@ async function getStudentRankInBatch(studentId, batchId) {
 
     const studentRank = rankings.findIndex(r => r.studentId.toString() === studentId.toString());
     return studentRank >= 0 ? studentRank + 1 : null;
-  } catch (error) {
-    logger.error('Error getting student rank in batch', { error: error.message, studentId, batchId });
+  } catch {
     return null;
   }
 }

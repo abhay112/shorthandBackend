@@ -1,0 +1,8 @@
+# Scripts and seed files can have console statements
+src/faker/seed.js
+src/scripts/*.js
+
+# Test files have different rules
+tests/**/*.test.js
+tests/**/*.spec.js
+

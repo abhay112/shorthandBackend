@@ -51,7 +51,7 @@ import {
   getStudentProgress,
   
   // Profile API Endpoints
-  getAssignedBatches,
+  // getAssignedBatches, // Unused - commented out
   getPerformanceRankings,
   getPerformanceTrends,
   getAchievements,

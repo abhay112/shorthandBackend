@@ -9,6 +9,8 @@ const adminSchema = new mongoose.Schema({
   lastLogin: { type: Date },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
+}, {
+  collection: 'admins'
 });
 
 // Update the updatedAt field before saving
@@ -16,5 +18,8 @@ adminSchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
 });
+
+// Indexes matching Prisma schema
+adminSchema.index({ role: 1, isActive: 1 });
 
 export default mongoose.model('Admin', adminSchema);

@@ -1,16 +1,12 @@
 import Student from '../models/Student.js';
 import Result from '../models/Result.js';
-import Test from '../models/Test.js';
-import TestSession from '../models/TestSession.js';
+// Test and TestSession imported but not used - kept for potential future use
+import StudentBatch from '../models/StudentBatch.js';
 import { AppError } from '../utils/AppError.js';
 import studentService from './studentService.js';
 import logger from '../utils/logger.js';
 
 const BASE_SELECT = '-firebaseUid';
-const BASE_POPULATE = [
-  { path: 'results', select: 'score createdAt wpm accuracy' },
-  { path: 'assignedBatches', select: 'name description startDate endDate' },
-];
 
 const buildStatusFilter = (status) => {
   if (!status) return {};
@@ -27,24 +23,59 @@ const buildStatusFilter = (status) => {
   }
 };
 
-const formatStudentSummary = (student) => {
+const formatStudentSummary = async (student, includeBatches = true, includeResults = true) => {
   if (!student) return null;
 
   const plain = student.toObject ? student.toObject() : student;
 
-  return {
+  const formatted = {
     id: plain._id,
     name: plain.name,
     email: plain.email,
     isApproved: plain.isApproved,
     isBlocked: plain.isBlocked,
     isOnlineMode: plain.isOnlineMode,
-    assignedBatches: plain.assignedBatches,
-    results: plain.results,
     lastLogin: plain.lastLogin,
     createdAt: plain.createdAt,
     updatedAt: plain.updatedAt,
   };
+
+  // Fetch batches using StudentBatch join table if requested
+  if (includeBatches) {
+    const studentBatches = await StudentBatch.find({ 
+      studentId: plain._id,
+      status: 'active' 
+    })
+      .populate('batchId', 'name description startDate endDate')
+      .lean();
+    formatted.assignedBatches = studentBatches.map(sb => sb.batchId).filter(Boolean);
+  } else {
+    formatted.assignedBatches = [];
+  }
+
+  // Fetch recent results count if requested
+  if (includeResults) {
+    const resultsCount = await Result.countDocuments({ 
+      studentId: plain._id,
+      status: 'completed' 
+    });
+    const recentResults = await Result.find({ 
+      studentId: plain._id,
+      status: 'completed' 
+    })
+      .select('wpm accuracy createdAt')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+    formatted.results = {
+      count: resultsCount,
+      recent: recentResults
+    };
+  } else {
+    formatted.results = { count: 0, recent: [] };
+  }
+
+  return formatted;
 };
 
 export const adminStudentService = {
@@ -65,7 +96,6 @@ export const adminStudentService = {
     const [students, total] = await Promise.all([
       Student.find(filters)
         .select(BASE_SELECT)
-        .populate(BASE_POPULATE)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pageSize)
@@ -73,8 +103,13 @@ export const adminStudentService = {
       Student.countDocuments(filters),
     ]);
 
+    // Format students with batches and results
+    const formattedStudents = await Promise.all(
+      students.map(student => formatStudentSummary(student, true, true))
+    );
+
     return {
-      students: students.map(formatStudentSummary),
+      students: formattedStudents,
       pagination: {
         current: pageNumber,
         pages: Math.ceil(total / pageSize) || 1,
@@ -87,17 +122,16 @@ export const adminStudentService = {
   findById: async (id) => {
     const student = await Student.findById(id)
       .select(BASE_SELECT)
-      .populate(BASE_POPULATE)
       .lean({ getters: true });
 
     if (!student) {
       throw new AppError('Student not found', 404);
     }
 
-    return formatStudentSummary(student);
+    return await formatStudentSummary(student, true, true);
   },
 
-  approve: async (id) => {
+  approve: async (id, adminId = null) => {
     const student = await Student.findById(id);
     if (!student) {
       throw new AppError('Student not found', 404);
@@ -105,9 +139,13 @@ export const adminStudentService = {
 
     student.isApproved = true;
     student.isBlocked = false;
+    if (adminId) {
+      student.approvedBy = adminId;
+      student.approvedAt = new Date();
+    }
     await student.save();
 
-    return formatStudentSummary(student);
+    return await formatStudentSummary(student.toObject(), false, false);
   },
 
   block: async (id) => {
@@ -120,7 +158,7 @@ export const adminStudentService = {
     student.isApproved = false;
     await student.save();
 
-    return formatStudentSummary(student);
+    return await formatStudentSummary(student.toObject(), false, false);
   },
 
   unblock: async (id) => {
@@ -132,7 +170,7 @@ export const adminStudentService = {
     student.isBlocked = false;
     await student.save();
 
-    return formatStudentSummary(student);
+    return await formatStudentSummary(student.toObject(), false, false);
   },
 
   bulkApprove: async (studentIds = []) => {
@@ -195,25 +233,33 @@ export const adminStudentService = {
   getStudentProfile: async (studentId) => {
     try {
       const student = await Student.findById(studentId)
-        .populate('assignedBatches', 'name description startDate endDate')
-        .select('-firebaseUid');
+        .select('-firebaseUid')
+        .lean();
 
       if (!student) {
         throw new AppError('Student not found', 404);
       }
 
+      // Get batches using StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId: studentId,
+        status: 'active' 
+      })
+        .populate('batchId', 'name description startDate endDate')
+        .lean();
+
       // Get statistics
       const stats = await studentService.getStudentStatistics(studentId);
       
       // Format student data with statistics
-      const studentData = student.toObject ? student.toObject() : student;
       return {
-        ...studentData,
-        id: studentData._id,
-        approved: studentData.isApproved,
-        blocked: studentData.isBlocked,
-        active: !studentData.isBlocked && studentData.isApproved,
-        memberSince: studentData.createdAt ? new Date(studentData.createdAt).toISOString().split('T')[0] : null,
+        ...student,
+        id: student._id,
+        approved: student.isApproved,
+        blocked: student.isBlocked,
+        active: !student.isBlocked && student.isApproved,
+        memberSince: student.createdAt ? new Date(student.createdAt).toISOString().split('T')[0] : null,
+        assignedBatches: studentBatches.map(sb => sb.batchId).filter(Boolean),
         statistics: stats
       };
     } catch (error) {
@@ -258,112 +304,119 @@ export const adminStudentService = {
     return studentService.getFullActivityLog(studentId, options);
   },
 
-  // Student Notes (Admin only)
-  getStudentNotes: async (studentId) => {
+  // Student Notes (Admin only) - Now stored in StudentBatch join table
+  getStudentNotes: async (studentId, batchId = null) => {
     try {
-      const student = await Student.findById(studentId).select('notes notesUpdatedAt notesUpdatedBy').lean();
-      if (!student) {
-        throw new AppError('Student not found', 404);
-      }
+      if (batchId) {
+        // Get notes from specific batch enrollment
+        const studentBatch = await StudentBatch.findOne({ 
+          studentId, 
+          batchId 
+        }).lean();
+        
+        if (!studentBatch) {
+          throw new AppError('Student enrollment not found', 404);
+        }
 
-      return {
-        notes: student.notes || '',
-        updatedAt: student.notesUpdatedAt || null,
-        updatedBy: student.notesUpdatedBy || null
-      };
+        return {
+          notes: studentBatch.notes || '',
+          batchId: studentBatch.batchId,
+          updatedAt: studentBatch.updatedAt || null
+        };
+      } else {
+        // Get all notes from all batch enrollments
+        const studentBatches = await StudentBatch.find({ 
+          studentId,
+          notes: { $exists: true, $ne: '' }
+        })
+          .populate('batchId', 'name')
+          .lean();
+
+        return {
+          notes: studentBatches.map(sb => ({
+            batchId: sb.batchId,
+            batchName: sb.batchId?.name,
+            notes: sb.notes,
+            updatedAt: sb.updatedAt
+          }))
+        };
+      }
     } catch (error) {
       logger.error('Error fetching student notes', { error: error.message, studentId });
       throw error;
     }
   },
 
-  updateStudentNotes: async (studentId, notes, adminId) => {
+  updateStudentNotes: async (studentId, notes, batchId = null) => {
     try {
-      const student = await Student.findByIdAndUpdate(
-        studentId,
-        {
+      if (!batchId) {
+        // If no batchId provided, we need to find the first active batch enrollment
+        // or throw an error requiring batchId
+        throw new AppError('batchId is required for updating notes', 400);
+      }
+
+      const studentBatch = await StudentBatch.findOneAndUpdate(
+        { studentId, batchId },
+        { 
           notes,
-          notesUpdatedAt: new Date(),
-          notesUpdatedBy: adminId
+          updatedAt: new Date()
         },
         { new: true }
-      ).select('notes notesUpdatedAt notesUpdatedBy').lean();
+      ).populate('batchId', 'name').lean();
 
-      if (!student) {
-        throw new AppError('Student not found', 404);
+      if (!studentBatch) {
+        throw new AppError('Student enrollment not found for this batch', 404);
       }
 
       return {
-        notes: student.notes,
-        updatedAt: student.notesUpdatedAt
+        notes: studentBatch.notes,
+        batchId: studentBatch.batchId,
+        updatedAt: studentBatch.updatedAt
       };
     } catch (error) {
-      logger.error('Error updating student notes', { error: error.message, studentId });
+      logger.error('Error updating student notes', { error: error.message, studentId, batchId });
       throw error;
     }
   },
 
-  // Student Settings (Admin only)
-  getStudentSettings: async (studentId) => {
-    try {
-      const student = await Student.findById(studentId).select('settings').lean();
-      if (!student) {
-        throw new AppError('Student not found', 404);
+  // Student Settings - Removed as not in Prisma schema
+  // If needed, these should be stored elsewhere or added to Prisma schema
+  getStudentSettings: async (_studentId) => {
+    // Return default settings structure for backward compatibility
+    // Note: Settings are not stored in the database per Prisma schema
+    return {
+      notifications: {
+        emailNotifications: true,
+        testReminders: true,
+        resultNotifications: true,
+        batchUpdates: true
+      },
+      preferences: {
+        theme: 'light',
+        language: 'en',
+        timezone: 'UTC'
+      },
+      permissions: {
+        canViewResults: true,
+        canViewRankings: true,
+        canRetakeTests: true
+      },
+      restrictions: {
+        maxDailyTests: 5,
+        allowedTestTypes: ['practice', 'assessment'],
+        blockedCategories: []
       }
-
-      // Return default settings if not set
-      return student.settings || {
-        notifications: {
-          emailNotifications: true,
-          testReminders: true,
-          resultNotifications: true,
-          batchUpdates: true
-        },
-        preferences: {
-          theme: 'light',
-          language: 'en',
-          timezone: 'UTC'
-        },
-        permissions: {
-          canViewResults: true,
-          canViewRankings: true,
-          canRetakeTests: true
-        },
-        restrictions: {
-          maxDailyTests: 5,
-          allowedTestTypes: ['practice', 'assessment'],
-          blockedCategories: []
-        }
-      };
-    } catch (error) {
-      logger.error('Error fetching student settings', { error: error.message, studentId });
-      throw error;
-    }
+    };
   },
 
   updateStudentSettings: async (studentId, settings) => {
-    try {
-      const student = await Student.findByIdAndUpdate(
-        studentId,
-        { 
-          settings,
-          settingsUpdatedAt: new Date()
-        },
-        { new: true }
-      ).select('settings settingsUpdatedAt').lean();
-
-      if (!student) {
-        throw new AppError('Student not found', 404);
-      }
-
-      return {
-        settings: student.settings,
-        updatedAt: student.settingsUpdatedAt
-      };
-    } catch (error) {
-      logger.error('Error updating student settings', { error: error.message, studentId });
-      throw error;
-    }
+    // Settings not stored per Prisma schema
+    // Return settings as-is for backward compatibility
+    logger.warn('Student settings update called but settings are not stored in database per Prisma schema', { studentId });
+    return {
+      settings,
+      updatedAt: new Date()
+    };
   },
 
   exportStudentActivityLog: async (studentId, options = {}) => {

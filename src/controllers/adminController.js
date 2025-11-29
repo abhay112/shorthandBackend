@@ -91,7 +91,6 @@ export const blockStudent = asyncHandler(async (req, res) => {
 export const getDashboardStats = asyncHandler(async (req, res) => {
   const {
     period,
-    limit,
     topPerformersLimit,
     pendingApprovalsLimit,
     testResultsLimit
@@ -129,9 +128,8 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
   // Load full document
   const student = await Student.findById(studentId);
-  console.log('Student to update:', student); 
   if (!student) {
-    throw new AppError('Student not found', 404);
+    throw createError('Student not found', 404);
   }
 
   // Mutate only the fields sent in body

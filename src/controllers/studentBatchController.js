@@ -41,7 +41,7 @@ export const getMyTests = asyncHandler(async (req, res) => {
       if (test.isActive) {
         tests.push(test);
       }
-    } catch (error) {
+    } catch {
       // Skip if test not found or inactive
       continue;
     }

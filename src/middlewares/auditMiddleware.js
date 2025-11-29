@@ -198,7 +198,7 @@ function extractFromResponse(responseData, path) {
       : responseData;
     
     return path.split('.').reduce((obj, key) => obj?.[key], parsedData?.data);
-  } catch (error) {
+  } catch {
     return null;
   }
 }

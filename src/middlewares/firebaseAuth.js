@@ -2,7 +2,7 @@ import { auth } from '../config/firebase.js';
 import Student from '../models/Student.js';
 import Admin from '../models/Admin.js';
 import logger from '../utils/logger.js';
-import { AppError } from '../utils/AppError.js';
+// AppError imported but not used - kept for potential future use
 
 // Firebase Authentication Middleware
 export const authenticateFirebase = async (req, res, next) => {

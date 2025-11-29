@@ -111,7 +111,7 @@ export const assignStudentsToBatch = asyncHandler(async (req, res) => {
     throw new AppError('Student IDs array is required', 400);
   }
 
-  const batch = await batchService.assignStudentsToBatch(id, studentIds);
+  const batch = await batchService.assignStudentsToBatch(id, studentIds, req.user?.id);
 
   return sendResponse(
     res,

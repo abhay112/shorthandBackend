@@ -37,7 +37,7 @@ export const createTest = asyncHandler(async (req, res) => {
       if (!Array.isArray(parsedAssignedDays)) {
         throw new AppError('assignedDays must be an array', 400);
       }
-    } catch (error) {
+    } catch {
       throw new AppError('Invalid assignedDays JSON format', 400);
     }
   }
@@ -48,7 +48,7 @@ export const createTest = asyncHandler(async (req, res) => {
       if (!Array.isArray(parsedAssignedBatches)) {
         throw new AppError('assignedBatches must be an array', 400);
       }
-    } catch (error) {
+    } catch {
       throw new AppError('Invalid assignedBatches JSON format', 400);
     }
   }
@@ -198,7 +198,7 @@ export const updateTest = asyncHandler(async (req, res) => {
     }
     try {
       return JSON.parse(rawValue);
-    } catch (error) {
+    } catch {
       throw new AppError(`Invalid JSON format for ${fieldName}`, 400);
     }
   };
@@ -512,5 +512,31 @@ export const generateRankingsForBatchTest = asyncHandler(async (req, res) => {
     result.message,
     result,
     { adminId: req.user.id, testId, batchId }
+  );
+});
+
+// Toggle test publication (publish/unpublish)
+export const toggleTestPublication = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { publish } = req.body; // Optional: explicitly set publish state (true/false), or omit to toggle
+
+  validateObjectId(id, 'test ID');
+
+  // Convert publish to boolean if provided, otherwise null (toggle)
+  const publishState = publish !== undefined ? Boolean(publish) : null;
+
+  const result = await testService.toggleTestPublication(id, req.user.id, publishState);
+
+  const message = result.action === 'published' 
+    ? 'Test published successfully' 
+    : 'Test unpublished successfully';
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    message,
+    result,
+    { adminId: req.user.id, testId: id, action: result.action }
   );
 });

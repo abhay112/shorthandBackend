@@ -14,7 +14,7 @@ class AuthService {
     try {
       const decodedToken = await auth.verifyIdToken(idToken);
       return decodedToken;
-    } catch (error) {
+    } catch {
       throw new AppError('Invalid Firebase token', 401);
     }
   }

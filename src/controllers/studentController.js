@@ -2,7 +2,7 @@ import studentService from '../services/studentService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
-import logger from '../utils/logger.js';
+// logger imported but not used - kept for potential future use
 
 // Profile Management
 export const getStudentProfile = asyncHandler(async (req, res) => {
@@ -433,7 +433,7 @@ export const getBatchResults = asyncHandler(async (req, res) => {
   });
 });
 
-export const downloadBatchCertificate = asyncHandler(async (req, res) => {
+export const downloadBatchCertificate = asyncHandler(async (req, _res) => {
   const studentId = req.user.id;
   const { batchId } = req.params;
   
@@ -490,9 +490,8 @@ export const getCurrentTestForShift = asyncHandler(async (req, res) => {
   });
 });
 
-export const submitTestResult = asyncHandler(async (req, res) => {
+export const submitTestResult = asyncHandler(async (req, _res) => {
   const data = req.body;
-  const studentId = req.user.id;
   
   if (!data) {
     throw createError('Test result data is required', 400);

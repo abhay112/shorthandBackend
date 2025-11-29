@@ -1,5 +1,5 @@
 import { AppError } from './AppError.js';
-import mongoose from 'mongoose';
+// mongoose imported but not used - kept for potential future use
 
 /**
  * Validate if a string is a valid MongoDB ObjectId
