@@ -66,13 +66,13 @@ sudo mkdir -p /etc/nginx/sites-enabled
 
 
 
-sudo nano /etc/nginx/sites-available/api.vikalpshorthand.com
+sudo nano /etc/nginx/sites-available/apitest.vikalpshorthand.com
 
 
 
 server {
     listen 80;
-    server_name api.vikalpshorthand.com;
+    server_name apitest.vikalpshorthand.com;
 
     location / {
         proxy_pass http://localhost:3000;
@@ -89,4 +89,4 @@ sudo systemctl restart nginx
 
 
 
-sudo certbot --nginx -d api.vikalpshorthand.com
+sudo certbot --nginx -d apitest.vikalpshorthand.com

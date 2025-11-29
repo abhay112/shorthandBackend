@@ -15,6 +15,11 @@ import dotenv from 'dotenv';
 dotenv.config(); 
 
 import { dbConnection, PORT } from './config/index.js'; 
+import {
+  getMetrics,
+  getMetricsContentType,
+  metricsMiddleware,
+} from './monitoring/metrics.js';
 
 const app = express();
 
@@ -61,6 +66,8 @@ app.use(cors({
       'http://localhost:3001',
       'http://localhost:5173',
       'http://localhost:5174',
+      'http://localhost:5714',
+      'http://192.168.0.115:5714',
       process.env.FRONTEND_URL
     ].filter(Boolean); // Remove undefined values
     
@@ -97,6 +104,7 @@ app.use(session({
 
 // Request logging middleware
 app.use(requestLogger);
+app.use(metricsMiddleware);
 
 app.get('/', (req, res) => {
   res.json({
@@ -105,6 +113,16 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
+});
+
+app.get('/metrics', async (_req, res, next) => {
+  try {
+    res.set('Content-Type', getMetricsContentType());
+    res.set('Cache-Control', 'no-cache');
+    res.send(await getMetrics());
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Swagger documentation
@@ -128,18 +146,24 @@ app.use('*', (req, res) => {
   });
 });
 
-logger.info('Database URL:', dbConnection.url);
+logger.warn('Database URL:', dbConnection.url);
 
+// Connect to MongoDB first, then start server
 mongoose
   .connect(dbConnection.url, dbConnection.options)
   .then(() => {
-    logger.info('✅ MongoDB connected successfully');
+    logger.warn('✅ MongoDB connected successfully');
+    // Start server only after MongoDB connection
     app.listen(PORT, () => {
-      logger.info(`🚀 Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+      logger.warn(`🚀 Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
     });
   })
   .catch(err => {
     logger.error('❌ MongoDB connection error:', err);
-    process.exit(1);
+    logger.warn('⚠️  Starting server anyway for metrics collection, but database operations will fail');
+    // Start server even if MongoDB fails (for metrics collection)
+    app.listen(PORT, () => {
+      logger.warn(`🚀 Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode (without DB)`);
+    });
   });
 
