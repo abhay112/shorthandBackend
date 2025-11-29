@@ -1,0 +1,203 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, merge-new-db-and-monitoring-code ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  NODE_VERSION: '20'
+  DOCKER_IMAGE: shorthnd-backend
+
+jobs:
+  # ============================================
+  # CI: Code Quality & Testing
+  # ============================================
+  ci:
+    name: Code Quality & Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run security audit
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Run tests
+        run: npm test -- --passWithNoTests
+
+      - name: Generate test coverage
+        run: npm run test:coverage
+        continue-on-error: true
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  # ============================================
+  # Build Docker Image
+  # ============================================
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: ci
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub (if needed)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # Validate Monitoring
+  # ============================================
+  validate-monitoring:
+    name: Validate Monitoring Setup
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start application with Docker Compose
+        run: |
+          docker-compose -f docker-compose.yml up -d
+          sleep 30  # Wait for services to start
+
+      - name: Validate monitoring endpoints
+        run: |
+          BASE_URL=http://localhost:3000 node scripts/validate-monitoring.js
+
+      - name: Check Prometheus metrics format
+        run: |
+          curl -f http://localhost:3000/metrics | grep -q "http_request" || exit 1
+          echo "✓ Metrics endpoint is valid"
+
+      - name: Check health endpoints
+        run: |
+          curl -f http://localhost:3000/health || exit 1
+          curl -f http://localhost:3000/health/live || exit 1
+          echo "✓ Health endpoints are working"
+
+      - name: Cleanup
+        if: always()
+        run: docker-compose -f docker-compose.yml down
+
+  # ============================================
+  # Deploy to Staging (if develop branch)
+  # ============================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, validate-monitoring]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging-api.example.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment..."
+          # Add your staging deployment commands here
+          # For example: SSH to server and run deploy script
+          # ssh user@staging-server "cd /app && ./deploy.sh"
+
+  # ============================================
+  # Deploy to Production (if main branch)
+  # ============================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, validate-monitoring]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://api.example.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production environment..."
+          # Add your production deployment commands here
+          # For example: SSH to server and run deploy script
+          # ssh user@production-server "cd /app && ./deploy.sh"
+
+      - name: Post-deployment health check
+        run: |
+          echo "Waiting for deployment to stabilize..."
+          sleep 60
+          # Add health check commands
+          # curl -f https://api.example.com/health || exit 1
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✓ Production deployment successful"
+          else
+            echo "✗ Production deployment failed"
+          fi
+

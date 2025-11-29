@@ -20,6 +20,7 @@ import {
   getMetricsContentType,
   metricsMiddleware,
 } from './monitoring/metrics.js';
+import healthRoutes from './routes/healthRoutes.js';
 
 const app = express();
 
@@ -124,6 +125,9 @@ app.get('/metrics', async (_req, res, next) => {
     next(error);
   }
 });
+
+// Health check routes (before API routes for faster response)
+app.use('/', healthRoutes);
 
 // Swagger documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
