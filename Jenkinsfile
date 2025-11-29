@@ -98,18 +98,21 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🐳 Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                    def image
+                    echo "🐳 Building Docker image: ${env.DOCKER_IMAGE}:${env.DOCKER_TAG}"
                     if (env.DOCKER_REGISTRY) {
-                        image = docker.build(
-                            "${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:${env.DOCKER_TAG}",
-                            "--tag ${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest ."
-                        )
+                        sh """
+                            docker build \\
+                                --tag ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE}:${env.DOCKER_TAG} \\
+                                --tag ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE}:latest \\
+                                .
+                        """
                     } else {
-                        image = docker.build(
-                            "${DOCKER_IMAGE}:${DOCKER_TAG}",
-                            "--tag ${DOCKER_IMAGE}:latest ."
-                        )
+                        sh """
+                            docker build \\
+                                --tag ${env.DOCKER_IMAGE}:${env.DOCKER_TAG} \\
+                                --tag ${env.DOCKER_IMAGE}:latest \\
+                                .
+                        """
                     }
                     echo "✅ Docker image built successfully"
                 }
@@ -125,24 +128,34 @@ pipeline {
             }
             steps {
                 script {
-                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub-credentials') {
-                        docker.image("${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:${env.DOCKER_TAG}").push()
-                        docker.image("${env.DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest").push()
-                        echo "✅ Images pushed to Docker Hub"
-                    }
+                    // Login using stored credentials - variables need to be accessed properly
+                    sh """
+                        if [ -n "\${DOCKER_USERNAME}" ] && [ -n "\${DOCKER_PASSWORD}" ]; then
+                            echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin
+                        elif [ -n "\${DOCKERHUB_USERNAME}" ] && [ -n "\${DOCKERHUB_PASSWORD}" ]; then
+                            echo \$DOCKERHUB_PASSWORD | docker login -u \$DOCKERHUB_USERNAME --password-stdin
+                        else
+                            echo "Using existing docker login session or skipping login"
+                        fi
+                    """
+                    sh """
+                        docker push ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE}:${env.DOCKER_TAG}
+                        docker push ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE}:latest
+                    """
+                    echo "✅ Images pushed to Docker Hub"
                 }
             }
         }
         
         stage('Deploy with Docker Compose') {
             steps {
-                dir("${DEPLOY_PATH}") {
+                dir("${env.DEPLOY_PATH}") {
                     sh '''
                         echo "🚀 Starting deployment..."
                         
                         # Use docker compose (v2) or docker-compose (v1) based on what's available
                         DOCKER_COMPOSE_CMD="docker compose"
-                        if ! command -v docker &> /dev/null || ! docker compose version &> /dev/null; then
+                        if ! command -v docker &> /dev/null || ! docker compose version &> /dev/null 2>&1; then
                             DOCKER_COMPOSE_CMD="docker-compose"
                         fi
                         
@@ -150,13 +163,16 @@ pipeline {
                         echo "Stopping existing containers..."
                         $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml down || true
                         
-                        # Build images (or use existing)
-                        echo "Building/updating images..."
-                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml build --no-cache
+                        # Use the image we built instead of rebuilding
+                        # Update docker-compose to use the pre-built image
+                        echo "Using pre-built Docker image: shorthnd-backend:latest"
                         
-                        # Start services
+                        # Tag the built image if needed (if we built with a tag)
+                        docker tag shorthnd-backend:latest shorthnd-backend:latest 2>/dev/null || true
+                        
+                        # Start services (docker-compose will use existing image or build if needed)
                         echo "Starting services..."
-                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml up -d
+                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml up -d --no-build
                         
                         # Wait for services to be healthy
                         echo "Waiting for services to start..."
