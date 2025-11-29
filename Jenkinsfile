@@ -39,7 +39,10 @@ pipeline {
             steps {
                 sh '''
                     echo "📦 Installing npm dependencies..."
-                    npm ci
+                    # Clean npm cache and install fresh
+                    npm cache clean --force || true
+                    rm -rf node_modules 2>/dev/null || true
+                    npm install --legacy-peer-deps
                     echo "✅ Dependencies installed"
                 '''
             }
@@ -121,17 +124,23 @@ pipeline {
                     sh '''
                         echo "🚀 Starting deployment..."
                         
+                        # Use docker compose (v2) or docker-compose (v1) based on what's available
+                        DOCKER_COMPOSE_CMD="docker compose"
+                        if ! command -v docker &> /dev/null || ! docker compose version &> /dev/null; then
+                            DOCKER_COMPOSE_CMD="docker-compose"
+                        fi
+                        
                         # Stop existing containers
                         echo "Stopping existing containers..."
-                        docker-compose -f docker-compose.prod.yml down || true
+                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml down || true
                         
                         # Build images (or use existing)
                         echo "Building/updating images..."
-                        docker-compose -f docker-compose.prod.yml build --no-cache
+                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml build --no-cache
                         
                         # Start services
                         echo "Starting services..."
-                        docker-compose -f docker-compose.prod.yml up -d
+                        $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml up -d
                         
                         # Wait for services to be healthy
                         echo "Waiting for services to start..."
@@ -207,9 +216,14 @@ pipeline {
             script {
                 sh '''
                     echo "Checking container status..."
-                    docker-compose -f docker-compose.prod.yml ps || true
-                    echo "Checking recent logs..."
-                    docker-compose -f docker-compose.prod.yml logs --tail=50 || true
+                    # Use docker compose (v2) or docker-compose (v1)
+                    if docker compose version &> /dev/null; then
+                        docker compose -f docker-compose.prod.yml ps || true
+                        docker compose -f docker-compose.prod.yml logs --tail=50 || true
+                    else
+                        docker-compose -f docker-compose.prod.yml ps || true
+                        docker-compose -f docker-compose.prod.yml logs --tail=50 || true
+                    fi
                 '''
             }
         }
