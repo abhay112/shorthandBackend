@@ -41,8 +41,25 @@ export const cleanTestDB = async () => {
  * Close test database connection
  */
 export const closeTestDB = async () => {
-  await mongoose.connection.dropDatabase();
-  await mongoose.connection.close();
+  try {
+    if (mongoose.connection.readyState !== 0) {
+      // Drop test database
+      if (mongoose.connection.db) {
+        await mongoose.connection.db.dropDatabase();
+      }
+      // Close connection
+      await mongoose.connection.close();
+      console.log('✅ Test database connection closed');
+    }
+  } catch (error) {
+    console.error('Error closing test database:', error.message);
+    // Force close even if there's an error
+    try {
+      await mongoose.connection.close();
+    } catch {
+      // Ignore close errors
+    }
+  }
 };
 
 /**

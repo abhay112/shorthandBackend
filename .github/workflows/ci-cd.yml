@@ -63,14 +63,14 @@ jobs:
           NODE_ENV: test
           TEST_MONGO_URI: mongodb://localhost:27017/test_shorthand
           MONGO_URI: mongodb://localhost:27017/test_shorthand
-        run: npm test -- --passWithNoTests
+        run: npm test -- --passWithNoTests --forceExit
 
       - name: Generate test coverage
         env:
           NODE_ENV: test
           TEST_MONGO_URI: mongodb://localhost:27017/test_shorthand
           MONGO_URI: mongodb://localhost:27017/test_shorthand
-        run: npm run test:coverage
+        run: npm run test:coverage -- --forceExit
         continue-on-error: true
 
       - name: Upload coverage reports
