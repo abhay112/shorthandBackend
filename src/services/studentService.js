@@ -732,14 +732,6 @@ const studentService = {
       }
 
       if (!canAccessTest) {
-        if (reservedAttempts > 0) {
-          return {
-            canTake: true,
-            remainingAttempts: 0,
-            reservedAttempts,
-            nextAttemptNumber: completedAttempts + 1
-          };
-        }
         // Only block if maxRetakes equals completedAttempts
         return { canTake: false, reason: 'Maximum retakes exceeded' };
       }
@@ -748,8 +740,7 @@ const studentService = {
         canTake: true,
         remainingAttempts,
         nextAttemptNumber: completedAttempts + 1,
-        reservedAttempts,
-        completedAttempts: completedAttempts // Include in response
+        completedAttempts // Include in response
       };
     } catch (_err) {
       throw _err;
