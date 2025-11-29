@@ -17,11 +17,14 @@ pipeline {
         DEPLOY_PATH = "${env.DEPLOY_PATH ?: WORKSPACE}"
         
         NODE_VERSION = '20'
+        NPM_CACHE_DIR = "${WORKSPACE}/.npm"
     }
     
     options {
         timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
+        // Cache node_modules between builds
+        skipDefaultCheckout(false)
     }
     
     stages {
@@ -46,12 +49,16 @@ pipeline {
                     echo "Node version: $(node --version)"
                     echo "NPM version: $(npm --version)"
                     
-                    # Clean npm cache and install fresh
-                    npm cache clean --force || true
-                    rm -rf node_modules 2>/dev/null || true
+                    # Configure npm to use workspace cache
+                    npm config set cache "${NPM_CACHE_DIR}" --global
                     
-                    # Install with legacy peer deps to handle version conflicts
-                    npm install --legacy-peer-deps
+                    # Use npm ci for faster CI installs (removes need to clean cache/node_modules)
+                    if [ -f package-lock.json ]; then
+                        npm ci --legacy-peer-deps --prefer-offline --no-audit
+                    else
+                        npm install --legacy-peer-deps --prefer-offline --no-audit
+                    fi
+                    
                     echo "✅ Dependencies installed"
                 '''
             }
