@@ -19,6 +19,7 @@ import {
   // Test Management
   getCurrentDayTest,
   getUpcomingTests,
+  getTestDetails,
   checkTestAccess,
 
   // Test Session Management
@@ -100,6 +101,8 @@ approvedRouter.get('/tests/current', getCurrentDayTest);
 approvedRouter.get('/tests/upcoming', getUpcomingTests);
 
 approvedRouter.get('/tests/:testId/access', checkTestAccess);
+
+approvedRouter.get('/tests/:testId', getTestDetails);
 
 // ==================== TEST SESSION MANAGEMENT ====================
 

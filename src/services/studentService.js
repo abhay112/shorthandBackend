@@ -14,6 +14,7 @@ import {
   processResultSideEffects,
   calculateAndSaveRanking as calculateAndSaveRankingUtil
 } from './utils/resultUtils.js';
+import { calculateWordStatistics, calculateAllMetrics } from './utils/textComparison.js';
 
 const toIdString = (value) => {
   if (!value) return null;
@@ -398,7 +399,7 @@ const studentService = {
       // First, find ALL active test assignments for the student's batches
       // We'll filter by date and test status afterwards
       const allAssignments = await BatchTestAssignment.find({
-        batchId: { $in: batchIds },
+            batchId: { $in: batchIds },
         status: 'active',
         isActive: true,
         isClosed: false
@@ -407,7 +408,7 @@ const studentService = {
         .populate('batchId', 'name')
         .sort({ priority: -1, assignedDate: -1 })
         .lean();
-
+      
       if (allAssignments.length === 0) {
         return null;
       }
@@ -445,7 +446,7 @@ const studentService = {
       
       // Filter for active and published tests
       const allAvailableTests = allTests.filter(t => t.isActive && t.isPublished);
-      
+
       if (!allAvailableTests || allAvailableTests.length === 0) {
         return null;
       }
@@ -470,7 +471,7 @@ const studentService = {
         const aPriority = aAssignments.length > 0 ? Math.max(...aAssignments.map(ta => ta.priority || 1)) : 1;
         const bPriority = bAssignments.length > 0 ? Math.max(...bAssignments.map(ta => ta.priority || 1)) : 1;
         
-        if (aPriority !== bPriority) return bPriority - aPriority;
+          if (aPriority !== bPriority) return bPriority - aPriority;
         
         // Finally sort by creation date (newest first)
         return new Date(b.createdAt) - new Date(a.createdAt);
@@ -628,6 +629,117 @@ const studentService = {
       }));
     } catch (_err) {
       throw _err;
+    }
+  },
+
+  getTestDetails: async (studentId, testId) => {
+    try {
+      // Get test with full details
+      const test = await Test.findById(testId)
+        .populate('uploadedBy', 'name email')
+        .populate('currentContent', 'version status referenceText audio publishedAt')
+        .lean();
+
+      if (!test) {
+        throw createError('Test not found', 404);
+      }
+
+      // Check if test is active and published
+      if (!test.isActive || !test.isPublished) {
+        throw createError('Test not available', 404);
+      }
+
+      // Get student batches from StudentBatch join table
+      const studentBatches = await StudentBatch.find({ 
+        studentId, 
+        status: 'active' 
+      }).lean();
+      
+      const studentBatchIds = studentBatches.map(sb => {
+        const batchId = sb.batchId?._id || sb.batchId;
+        return batchId ? String(batchId) : null;
+      }).filter(Boolean);
+
+      if (studentBatchIds.length === 0) {
+        throw createError('You are not enrolled in any active batches', 403);
+      }
+
+      // Check if test is assigned to any of the student's batches
+      const testAssignments = await BatchTestAssignment.find({
+        batchId: { $in: studentBatchIds },
+        testId,
+        status: 'active',
+        isActive: true
+      })
+        .populate('batchId', 'name description')
+        .sort({ assignedDate: -1, priority: -1 })
+        .lean();
+
+      if (testAssignments.length === 0) {
+        throw createError('This test is not assigned to any of your batches', 403);
+      }
+
+      // Get student's attempt information
+      const { completedAttempts, reservedAttempts } = await getAttemptUsage(studentId, testId);
+      const remainingAttempts = Math.max(0, test.maxRetakes - completedAttempts);
+
+      // Get last attempt details
+      const lastAttempt = await Result.findOne({
+        studentId,
+        testId,
+        status: 'completed'
+      })
+        .sort({ submittedAt: -1 })
+        .lean();
+
+      // Check if test is closed for any of the student's batches
+      const closedAssignments = await BatchTestAssignment.find({
+        batchId: { $in: studentBatchIds },
+        testId,
+        isClosed: true
+      }).lean();
+
+      const isClosed = closedAssignments.length > 0;
+
+      // Get assignment details for student's batches
+      const batchAssignments = testAssignments.map(assignment => ({
+        batchId: assignment.batchId?._id || assignment.batchId,
+        batchName: assignment.batchId?.name || 'Unknown Batch',
+        assignedDate: assignment.assignedDate,
+        assignedAt: assignment.assignedAt,
+        dayNumber: assignment.dayNumber,
+        priority: assignment.priority,
+        isClosed: assignment.isClosed,
+        availableFrom: assignment.availableFrom,
+        availableUntil: assignment.availableUntil
+      }));
+
+      // Prepare test details response
+      const testDetails = {
+        ...test,
+        assignedBatches: batchAssignments,
+        isClosed,
+        attemptInfo: {
+          totalAttempts: completedAttempts,
+          reservedAttempts,
+          maxRetakes: test.maxRetakes,
+          remainingAttempts,
+          hasCompleted: completedAttempts > 0,
+          lastAttemptDate: lastAttempt ? lastAttempt.submittedAt : null,
+          lastAttemptScore: lastAttempt ? {
+            wpm: lastAttempt.wpm,
+            accuracy: lastAttempt.accuracy,
+            rank: lastAttempt.rank,
+            percentile: lastAttempt.percentile,
+            timeTaken: lastAttempt.timeTaken
+          } : null
+        },
+        canTake: !isClosed && remainingAttempts > 0 && !test.isBlocked
+      };
+
+      return testDetails;
+    } catch (error) {
+      throw error;
     }
   },
 
@@ -900,15 +1012,40 @@ const studentService = {
         throw createError('Active test session not found', 404);
       }
 
+      // Get test to retrieve reference text
+      const test = await Test.findById(session.testId).populate('currentContent').lean();
+      if (!test) {
+        throw createError('Test not found', 404);
+      }
+
+      // Get reference text from TestContent or Test
+      let referenceText = '';
+      if (test.currentContent && test.currentContent.referenceText) {
+        referenceText = test.currentContent.referenceText;
+      } else if (test.referenceText) {
+        referenceText = test.referenceText;
+      }
+
+      // Extract typedText from request (can be in resultData.typedText or resultData.rawInput)
+      const typedText = resultData.typedText || resultData.rawInput || '';
+      
+      // Calculate time taken (use provided timeTaken or calculate from session)
+      const timeTaken = resultData.timeTaken || resultData.elapsedSeconds || 
+        Math.floor((new Date() - session.timeStarted) / 1000);
+
+      // Calculate all metrics from typedText and referenceText
+      const calculatedMetrics = calculateAllMetrics(referenceText, typedText, timeTaken);
+
       // Update session
       session.status = 'completed';
       session.timeCompleted = new Date();
       session.totalAttempts += 1;
       await session.save();
 
-      // Create result
+      // Create result with calculated metrics
       const result = await Result.create({
-        ...resultData,
+        ...calculatedMetrics,
+        typedText, // Store the typed text
         studentId,
         batchId: session.batchId,
         testId: session.testId,
@@ -917,7 +1054,7 @@ const studentService = {
         isRetake: session.currentAttempt > 1,
         timeStarted: session.timeStarted,
         timeCompleted: session.timeCompleted,
-        timeTaken: Math.floor((session.timeCompleted - session.timeStarted) / 1000)
+        timeTaken: timeTaken
       });
 
       // Process result side effects (student linkage, statistics, ranking)
@@ -1058,6 +1195,22 @@ const studentService = {
         }
       } : null;
 
+      // Get reference text from TestContent
+      let referenceText = null;
+      if (result.testId) {
+        const testId = result.testId._id || result.testId;
+        const test = await Test.findById(testId).populate('currentContent').lean();
+        if (test && test.currentContent) {
+          referenceText = test.currentContent.referenceText || null;
+        } else if (test && test.referenceText) {
+          referenceText = test.referenceText;
+        }
+      }
+
+      // Calculate word statistics using typed text and reference text
+      const typedText = result.typedText || '';
+      const wordStats = calculateWordStatistics(referenceText || '', typedText);
+
       // Handle null references in result
       const formattedResult = {
         ...result,
@@ -1068,7 +1221,7 @@ const studentService = {
           difficulty: result.testId.difficulty || null,
           category: result.testId.category || null,
           duration: result.testId.duration || null,
-          referenceText: result.testId.referenceText || null
+          referenceText: referenceText
         } : {
           _id: null,
           title: 'Deleted Test',
@@ -1089,7 +1242,15 @@ const studentService = {
         },
         rankingContext,
         errorStats,
-        comparison
+        comparison,
+        // Word statistics for frontend display
+        wordStatistics: {
+          totalWords: wordStats.totalWords,
+          writtenWords: wordStats.writtenWords,
+          totalMistakes: wordStats.totalMistakes
+        },
+        // Include typed text for frontend comparison
+        typedText: typedText
       };
 
       return formattedResult;
@@ -1270,8 +1431,8 @@ const studentService = {
         enrollmentMap.set(batchId, {
           enrolledAt: sb.enrolledAt || sb.createdAt || new Date(),
           enrollmentStatus: sb.status || 'active'
+          });
         });
-      });
 
       // Get student counts for each batch
       const studentCounts = await StudentBatch.aggregate([
@@ -2194,26 +2355,26 @@ const studentService = {
         batchId = firstBatch.batchId?._id || firstBatch.batchId;
         
         if (batchId) {
-          const batchResults = await Result.find({
+        const batchResults = await Result.find({
             batchId: batchId,
-            status: 'completed'
-          })
-            .select('studentId wpm')
-            .lean();
+          status: 'completed'
+        })
+          .select('studentId wpm')
+          .lean();
 
-          const batchWpm = batchResults.map(r => r.wpm).sort((a, b) => b - a);
-          const batchStudentWpm = batchResults
-            .filter(r => r.studentId.toString() === studentId.toString())
-            .map(r => r.wpm)
-            .sort((a, b) => b - a);
+        const batchWpm = batchResults.map(r => r.wpm).sort((a, b) => b - a);
+        const batchStudentWpm = batchResults
+          .filter(r => r.studentId.toString() === studentId.toString())
+          .map(r => r.wpm)
+          .sort((a, b) => b - a);
 
-          if (batchStudentWpm.length > 0) {
-            const bestBatchWpm = batchStudentWpm[0];
-            batchRank = batchWpm.findIndex(wpm => wpm <= bestBatchWpm) + 1;
-            const batchTotalStudents = new Set(batchResults.map(r => r.studentId.toString())).size;
-            batchPercentile = batchTotalStudents > 0
-              ? Math.round(((batchTotalStudents - batchRank) / batchTotalStudents) * 100 * 10) / 10
-              : 0;
+        if (batchStudentWpm.length > 0) {
+          const bestBatchWpm = batchStudentWpm[0];
+          batchRank = batchWpm.findIndex(wpm => wpm <= bestBatchWpm) + 1;
+          const batchTotalStudents = new Set(batchResults.map(r => r.studentId.toString())).size;
+          batchPercentile = batchTotalStudents > 0
+            ? Math.round(((batchTotalStudents - batchRank) / batchTotalStudents) * 100 * 10) / 10
+            : 0;
           }
         }
       }

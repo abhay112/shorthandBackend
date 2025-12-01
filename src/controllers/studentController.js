@@ -82,6 +82,19 @@ export const getUpcomingTests = asyncHandler(async (req, res) => {
   });
 });
 
+export const getTestDetails = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { testId } = req.params;
+
+  const testDetails = await studentService.getTestDetails(studentId, testId);
+
+  return sendResponse(res, 200, true, 'Test details fetched successfully', { test: testDetails }, {
+    studentId: studentId,
+    testId: testId,
+    ip: req.ip
+  });
+});
+
 export const checkTestAccess = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { testId } = req.params;
@@ -123,22 +136,25 @@ export const endTestSession = asyncHandler(async (req, res) => {
   // Handle both formats: direct data or nested under 'results' key
   const resultData = req.body.results || req.body;
   
-  // Validate required fields
-  const requiredFields = ['wpm', 'accuracy', 'speed', 'totalWords', 'correctWords', 'incorrectWords', 'totalCharacters', 'correctCharacters', 'incorrectCharacters', 'mistakes'];
-  const missingFields = requiredFields.filter(field => resultData[field] === undefined);
+  // Validate required field: typedText (or rawInput for backward compatibility)
+  const typedText = resultData.typedText || resultData.rawInput;
   
-  if (missingFields.length > 0) {
-    throw createError(`Missing required fields: ${missingFields.join(', ')}`, 400);
+  if (!typedText && typedText !== '') {
+    throw createError('Missing required field: typedText (or rawInput)', 400);
   }
   
-  const result = await studentService.endTestSession(studentId, sessionId, resultData);
+  // Prepare data for service (only send typedText and optional timeTaken)
+  const serviceData = {
+    typedText: typedText || '',
+    rawInput: resultData.rawInput || typedText || '', // Support both field names
+    timeTaken: resultData.timeTaken || resultData.elapsedSeconds // Optional: time in seconds
+  };
   
-  return sendResponse(res, 200, true, 'Test completed successfully', { result }, {
+  await studentService.endTestSession(studentId, sessionId, serviceData);
+  
+  return sendResponse(res, 200, true, 'Test completed successfully', {}, {
     studentId: studentId,
     sessionId: sessionId,
-    resultId: result._id,
-    wpm: result.wpm,
-    accuracy: result.accuracy,
     ip: req.ip
   });
 });

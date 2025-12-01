@@ -104,6 +104,12 @@ const resultSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed
   },
   
+  // Typed text by the student (for comparison and display)
+  typedText: {
+    type: String,
+    default: ''
+  },
+  
   // Test session information
   sessionId: { 
     type: String, 
