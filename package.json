@@ -18,7 +18,7 @@
     "audit": "npm audit --audit-level=moderate",
     "build": "echo 'Build step - no compilation needed for Node.js'",
     "docker:build": "docker build -t shorthand-backend:latest .",
-    "docker:run": "docker run -p 3000:3000 --env-file .env shorthand-backend:latest",
+    "docker:run": "docker run -p 5001:5001 --env-file .env shorthand-backend:latest",
     "ci:local": "bash scripts/test-ci-local.sh"
   },
   "keywords": [],
