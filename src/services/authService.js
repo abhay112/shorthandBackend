@@ -121,6 +121,59 @@ class AuthService {
   }
 
   /**
+   * Register user with explicit role
+   * @param {string} idToken
+   * @param {'student'|'admin'|'super_admin'} role
+   * @returns {Object} { user, isNewUser }
+   */
+  async registerUser(idToken, role = 'student') {
+    const decodedToken = await this.verifyFirebaseToken(idToken);
+    const { uid, email } = decodedToken;
+
+    if (!email) throw new AppError('Email not available in Firebase token', 400);
+
+    const existing = await this.findUserByFirebaseUid(uid);
+    if (existing?.user) {
+      // Already registered; refresh last login for consistency
+      await this.updateLastLogin(existing.user);
+      return {
+        user: {
+          id: existing.user._id,
+          firebaseUid: existing.user.firebaseUid,
+          email: existing.user.email,
+          name: existing.user.name,
+          role: existing.role,
+          isApproved: existing.user.isApproved || false,
+          isBlocked: existing.user.isBlocked || false,
+          isActive: existing.user.isActive !== undefined ? existing.user.isActive : true,
+        },
+        isNewUser: false,
+      };
+    }
+
+    let user;
+    if (role === 'student') {
+      user = await this.createStudent(decodedToken);
+    } else {
+      user = await this.createAdmin(decodedToken, role);
+    }
+
+    return {
+      user: {
+        id: user._id,
+        firebaseUid: user.firebaseUid,
+        email: user.email,
+        name: user.name,
+        role,
+        isApproved: user.isApproved || false,
+        isBlocked: user.isBlocked || false,
+        isActive: user.isActive !== undefined ? user.isActive : true,
+      },
+      isNewUser: true,
+    };
+  }
+
+  /**
    * Get user profile by Firebase UID
    * @param {string} firebaseUid
    * @returns {Object} user profile

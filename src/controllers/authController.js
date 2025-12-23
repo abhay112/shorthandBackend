@@ -5,6 +5,40 @@ import { AppError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 
 /**
+ * Register user
+ */
+export const register = asyncHandler(async (req, res) => {
+  const { token, role = 'student' } = req.body;
+
+  if (!token) throw new AppError('Firebase ID token is required', 400);
+
+  const allowedRoles = ['student', 'admin', 'super_admin'];
+  if (role && !allowedRoles.includes(role)) throw new AppError('Invalid role', 400);
+
+  const registerResult = await authService.registerUser(token, role);
+
+  // set cookie
+  res.cookie('authToken', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 24 * 60 * 60 * 1000,
+  });
+
+  const statusCode = registerResult.isNewUser ? 201 : 200;
+  const message = registerResult.isNewUser ? 'Registration successful' : 'User already registered';
+
+  return sendResponse(
+    res,
+    statusCode,
+    true,
+    message,
+    { user: registerResult.user },
+    { userId: registerResult.user.id, email: registerResult.user.email }
+  );
+});
+
+/**
  * Login user
  */
 export const login = asyncHandler(async (req, res) => {
