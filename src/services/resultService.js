@@ -1,5 +1,6 @@
 import Result from '../models/Result.js';
 import TestSession from '../models/TestSession.js';
+import TestContent from '../models/TestContent.js';
 import { AppError } from '../utils/AppError.js';
 import { processResultSideEffects } from './utils/resultUtils.js';
 
@@ -98,7 +99,7 @@ const resultService = {
   getResultById: async (resultId) => {
     const result = await Result.findById(resultId)
       .populate('studentId', 'name email phoneNumber rollNumber')
-      .populate('testId', 'title category difficulty duration maxRetakes')
+      .populate('testId', 'title category difficulty duration maxRetakes currentContent')
       .populate('batchId', 'name description');
 
     if (!result) {
@@ -106,10 +107,65 @@ const resultService = {
     }
 
     const session = await TestSession.findOne({ sessionId: result.sessionId })
-      .select('sessionId currentAttempt totalAttempts status timeStarted timeCompleted timeExpires maxRetakes results');
+      .select('sessionId currentAttempt totalAttempts status timeStarted timeCompleted timeExpires maxRetakes sessionData');
 
-    const detailedResult = result.toObject({ virtuals: true });
+    // Get test content (published version)
+    let testContent = null;
+    if (result.testId && result.testId.currentContent) {
+      testContent = await TestContent.findById(result.testId.currentContent)
+        .select('version status referenceText audio metadata publishedAt');
+      
+      // If currentContent doesn't exist or is not published, try to find published content
+      if (!testContent || testContent.status !== 'published') {
+        testContent = await TestContent.findOne({
+          testId: result.testId._id || result.testId,
+          status: 'published'
+        })
+        .select('version status referenceText audio metadata publishedAt')
+        .sort({ version: -1 }); // Get latest published version
+      }
+    } else if (result.testId) {
+      // Fallback: try to find any published content for this test
+      testContent = await TestContent.findOne({
+        testId: result.testId._id || result.testId,
+        status: 'published'
+      })
+      .select('version status referenceText audio metadata publishedAt')
+      .sort({ version: -1 });
+    }
+
+    // Extract submitted text - check result object first, then session data
+    let submittedText = null;
+    
+    // First, check if typedText exists in the result object itself
+    const resultObj = result.toObject({ virtuals: true });
+    if (resultObj.typedText) {
+      submittedText = resultObj.typedText;
+    } else if (session && session.sessionData) {
+      // Fallback: check various possible field names in session data
+      submittedText = session.sessionData.submittedText || 
+                     session.sessionData.text || 
+                     session.sessionData.transcription ||
+                     session.sessionData.studentText ||
+                     session.sessionData.typedText ||
+                     null;
+    }
+
+    const detailedResult = resultObj;
     detailedResult.sessionDetails = session ? session.toObject({ virtuals: true }) : null;
+    
+    // Add test content
+    detailedResult.testContent = testContent ? {
+      version: testContent.version,
+      status: testContent.status,
+      referenceText: testContent.referenceText || '',
+      audio: testContent.audio || null,
+      metadata: testContent.metadata || {},
+      publishedAt: testContent.publishedAt
+    } : null;
+
+    // Add submitted text by student (use submittedText field, keep typedText in result for backward compatibility)
+    detailedResult.submittedText = submittedText;
 
     return detailedResult;
   }
