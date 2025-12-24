@@ -470,7 +470,145 @@ get_docker_compose_cmd() {
     fi
 }
 
-# Deploy monitoring stack
+# Install Chromium for PM2 backend
+install_chromium() {
+    log_step "Installing Chromium for Backend"
+    
+    if command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
+        log_success "Chromium is already installed"
+        return 0
+    fi
+    
+    log_info "Installing Chromium browser..."
+    
+    if [ -f /etc/debian_version ]; then
+        # Debian/Ubuntu
+        apt-get update -qq
+        apt-get install -y chromium-browser || apt-get install -y chromium || error_exit "Failed to install Chromium"
+        log_success "Chromium installed successfully"
+    elif [ -f /etc/redhat-release ]; then
+        # RHEL/CentOS
+        yum install -y chromium || error_exit "Failed to install Chromium"
+        log_success "Chromium installed successfully"
+    else
+        log_warning "Unknown Linux distribution. Please install Chromium manually."
+        log_info "On Ubuntu/Debian: sudo apt-get install chromium-browser"
+        log_info "On CentOS/RHEL: sudo yum install chromium"
+    fi
+}
+
+# Install PM2 if not already installed
+install_pm2() {
+    log_info "Checking PM2 installation..."
+    
+    if command -v pm2 >/dev/null 2>&1; then
+        log_success "PM2 is already installed"
+        pm2 --version
+        return 0
+    fi
+    
+    log_info "Installing PM2 globally..."
+    npm install -g pm2 || error_exit "Failed to install PM2"
+    
+    log_success "PM2 installed successfully"
+    pm2 --version
+}
+
+# Deploy backend with PM2
+deploy_backend_pm2() {
+    log_step "Step 9: Deploying Backend with PM2"
+    
+    cd "$PROJECT_ROOT" || error_exit "Failed to change to project directory"
+    
+    # Install PM2 if needed
+    install_pm2
+    
+    # Install Chromium if needed
+    install_chromium
+    
+    # Ensure .env file exists
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        log_warning ".env file not found. Creating from template..."
+        if [ -f "$PROJECT_ROOT/env.production.template" ]; then
+            cp "$PROJECT_ROOT/env.production.template" "$PROJECT_ROOT/.env"
+            log_info "Please update .env file with your configuration"
+        else
+            error_exit ".env file not found and no template available"
+        fi
+    fi
+    
+    # Update .env for PM2 deployment
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        # Update LOKI_URL to use localhost instead of docker service name
+        if grep -q "^LOKI_URL=" "$PROJECT_ROOT/.env"; then
+            sed -i 's|^LOKI_URL=.*|LOKI_URL=http://localhost:3100|' "$PROJECT_ROOT/.env"
+        else
+            echo "LOKI_URL=http://localhost:3100" >> "$PROJECT_ROOT/.env"
+        fi
+        
+        # Set CHROME_EXECUTABLE_PATH
+        CHROMIUM_PATH=""
+        if command -v chromium-browser >/dev/null 2>&1; then
+            CHROMIUM_PATH=$(which chromium-browser)
+        elif command -v chromium >/dev/null 2>&1; then
+            CHROMIUM_PATH=$(which chromium)
+        fi
+        
+        if [ -n "$CHROMIUM_PATH" ]; then
+            if grep -q "^CHROME_EXECUTABLE_PATH=" "$PROJECT_ROOT/.env"; then
+                sed -i "s|^CHROME_EXECUTABLE_PATH=.*|CHROME_EXECUTABLE_PATH=$CHROMIUM_PATH|" "$PROJECT_ROOT/.env"
+            else
+                echo "CHROME_EXECUTABLE_PATH=$CHROMIUM_PATH" >> "$PROJECT_ROOT/.env"
+            fi
+            log_info "Set CHROME_EXECUTABLE_PATH=$CHROMIUM_PATH"
+        fi
+        
+        # Ensure PORT is set
+        if ! grep -q "^PORT=" "$PROJECT_ROOT/.env"; then
+            echo "PORT=5001" >> "$PROJECT_ROOT/.env"
+        fi
+    fi
+    
+    # Install npm dependencies if needed
+    if [ ! -d "$PROJECT_ROOT/node_modules" ]; then
+        log_info "Installing npm dependencies..."
+        npm install --production || error_exit "Failed to install npm dependencies"
+    fi
+    
+    # Stop existing PM2 process if running
+    if pm2 list | grep -q "shorthand-backend"; then
+        log_info "Stopping existing PM2 process..."
+        pm2 stop shorthand-backend || true
+        pm2 delete shorthand-backend || true
+    fi
+    
+    # Start backend with PM2
+    log_info "Starting backend with PM2..."
+    pm2 start ecosystem.config.js || error_exit "Failed to start backend with PM2"
+    
+    # Save PM2 process list
+    pm2 save || log_warning "Failed to save PM2 process list"
+    
+    # Setup PM2 startup script
+    log_info "Setting up PM2 startup script..."
+    if [ -n "$SUDO_USER" ]; then
+        pm2 startup systemd -u "$SUDO_USER" --hp "/home/$SUDO_USER" 2>/dev/null || \
+        pm2 startup -u "$SUDO_USER" --hp "/home/$SUDO_USER" 2>/dev/null || \
+        log_warning "PM2 startup script setup failed (you may need to run 'pm2 startup' manually)"
+    else
+        log_warning "SUDO_USER not set. PM2 startup script not configured."
+        log_info "Run 'pm2 startup' manually to enable auto-start on reboot"
+    fi
+    
+    # Wait for backend to be healthy
+    log_info "Waiting for backend to be healthy..."
+    wait_for_service "Backend API" "$BACKEND_PORT" "/" 90
+    
+    log_success "Backend deployed with PM2"
+    pm2 status
+}
+
+# Deploy monitoring stack (without backend)
 deploy_monitoring_stack() {
     log_step "Step 10: Deploying Monitoring Stack"
     
@@ -480,60 +618,34 @@ deploy_monitoring_stack() {
     
     # Check if services are already running
     local services_running=false
-    if $compose_cmd -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
+    if $compose_cmd -f docker-compose.monitoring.yml ps 2>/dev/null | grep -q "Up"; then
         services_running=true
-        log_info "Existing services detected. Performing update..."
+        log_info "Existing monitoring services detected. Performing update..."
     fi
     
-    # Ensure PORT and CORS settings are set correctly in .env file
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-        # Update PORT if needed
-        if grep -q "^PORT=" "$PROJECT_ROOT/.env"; then
-            if ! grep -q "^PORT=5001" "$PROJECT_ROOT/.env"; then
-                log_info "Updating PORT in .env file to 5001..."
-                sed -i 's/^PORT=.*/PORT=5001/' "$PROJECT_ROOT/.env"
-            fi
-        else
-            log_info "Adding PORT=5001 to .env file..."
-            echo "PORT=5001" >> "$PROJECT_ROOT/.env"
-        fi
-        
-        # Ensure ALLOWED_ORIGINS includes both www and non-www versions
-        if ! grep -q "^ALLOWED_ORIGINS=" "$PROJECT_ROOT/.env"; then
-            log_info "Adding ALLOWED_ORIGINS to .env file..."
-            echo "ALLOWED_ORIGINS=https://vikalpshorthand.com,https://www.vikalpshorthand.com" >> "$PROJECT_ROOT/.env"
-        elif ! grep -q "www.vikalpshorthand.com" "$PROJECT_ROOT/.env"; then
-            log_info "Updating ALLOWED_ORIGINS to include www subdomain..."
-            if grep -q "^ALLOWED_ORIGINS=https://vikalpshorthand.com" "$PROJECT_ROOT/.env"; then
-                sed -i 's|^ALLOWED_ORIGINS=https://vikalpshorthand.com|ALLOWED_ORIGINS=https://vikalpshorthand.com,https://www.vikalpshorthand.com|' "$PROJECT_ROOT/.env"
-            fi
-        fi
-    fi
+    # Stop old backend container if it exists
+    log_info "Stopping old backend container if it exists..."
+    docker stop shorthnd-backend 2>/dev/null || true
+    docker rm -f shorthnd-backend 2>/dev/null || true
     
-    # Pull latest images for services that use pre-built images
-    log_info "Pulling latest Docker images..."
-    $compose_cmd -f docker-compose.prod.yml pull || log_warning "Some images failed to pull (may use cached versions)"
+    # Pull latest images for monitoring services
+    log_info "Pulling latest Docker images for monitoring..."
+    $compose_cmd -f docker-compose.monitoring.yml pull || log_warning "Some images failed to pull (may use cached versions)"
     
-    # Build backend image (it has a build section)
-    log_info "Building backend Docker image..."
-    $compose_cmd -f docker-compose.prod.yml build --no-cache backend || log_warning "Backend build had warnings"
-    
-    # Start services (--build ensures backend is built, --force-recreate ensures new env vars are used)
+    # Start monitoring services
     if [ "$services_running" = true ]; then
-        log_info "Updating services..."
-        $compose_cmd -f docker-compose.prod.yml up -d --build --force-recreate backend
-        $compose_cmd -f docker-compose.prod.yml up -d
+        log_info "Updating monitoring services..."
+        $compose_cmd -f docker-compose.monitoring.yml up -d --force-recreate
     else
-        log_info "Starting services for the first time..."
-        $compose_cmd -f docker-compose.prod.yml up -d --build
+        log_info "Starting monitoring services for the first time..."
+        $compose_cmd -f docker-compose.monitoring.yml up -d
     fi
     
-    # Wait for all services to be healthy
-    log_info "Waiting for services to be healthy..."
+    # Wait for monitoring services to be healthy
+    log_info "Waiting for monitoring services to be healthy..."
     wait_for_service "Loki" "$LOKI_PORT" "/ready" 60
     wait_for_service "Prometheus" "$PROMETHEUS_PORT" "/-/healthy" 60
     wait_for_service "Grafana" "$GRAFANA_PORT" "/api/health" 90
-    wait_for_service "Backend API" "$BACKEND_PORT" "/" 90
     
     log_success "Monitoring stack deployed"
 }
@@ -797,14 +909,23 @@ verify_deployment() {
         all_healthy=false
     fi
     
-    # Check Docker containers
-    log_info "Checking Docker containers..."
+    # Check Docker containers (monitoring only)
+    log_info "Checking Docker containers (monitoring services)..."
     local compose_cmd=$(get_docker_compose_cmd)
-    if $compose_cmd -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
-        log_success "All Docker containers are running"
+    if $compose_cmd -f docker-compose.monitoring.yml ps 2>/dev/null | grep -q "Up"; then
+        log_success "All monitoring Docker containers are running"
     else
         log_warning "Some Docker containers may not be running"
-        $compose_cmd -f docker-compose.prod.yml ps
+        $compose_cmd -f docker-compose.monitoring.yml ps
+    fi
+    
+    # Check PM2 process
+    log_info "Checking PM2 process..."
+    if pm2 list | grep -q "shorthand-backend.*online"; then
+        log_success "Backend PM2 process is running"
+    else
+        log_warning "Backend PM2 process may not be running"
+        pm2 list
     fi
     
     if [ "$all_healthy" = true ]; then
@@ -849,10 +970,18 @@ print_summary() {
     
     local compose_cmd=$(get_docker_compose_cmd)
     echo "Useful commands:"
-    echo "  - View logs:        $compose_cmd -f docker-compose.prod.yml logs -f"
-    echo "  - Restart services:  $compose_cmd -f docker-compose.prod.yml restart"
-    echo "  - Stop services:     $compose_cmd -f docker-compose.prod.yml down"
-    echo "  - View status:       $compose_cmd -f docker-compose.prod.yml ps"
+    echo ""
+    echo "Backend (PM2):"
+    echo "  - View logs:        pm2 logs shorthand-backend"
+    echo "  - Restart:          pm2 restart shorthand-backend"
+    echo "  - Stop:             pm2 stop shorthand-backend"
+    echo "  - Status:           pm2 status"
+    echo ""
+    echo "Monitoring (Docker):"
+    echo "  - View logs:        $compose_cmd -f docker-compose.monitoring.yml logs -f"
+    echo "  - Restart services:  $compose_cmd -f docker-compose.monitoring.yml restart"
+    echo "  - Stop services:     $compose_cmd -f docker-compose.monitoring.yml down"
+    echo "  - View status:       $compose_cmd -f docker-compose.monitoring.yml ps"
     echo ""
 }
 
@@ -880,6 +1009,7 @@ main() {
     install_certbot
     verify_project_files
     check_and_free_ports
+    deploy_backend_pm2
     deploy_monitoring_stack
     setup_nginx_configs
     setup_ssl_certificates
