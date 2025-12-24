@@ -325,7 +325,10 @@ export const generatePdf = asyncHandler(async (req, res) => {
           exists: fs.existsSync(chromeExecutablePath)
         });
         puppeteerInstance = puppeteer;
-        delete launchOptions.executablePath; // Ensure no executablePath is set
+        // CRITICAL: Remove executablePath completely
+        if ('executablePath' in launchOptions) {
+          delete launchOptions.executablePath;
+        }
         const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
         if (skipDownload) {
           logger.warn('PUPPETEER_SKIP_CHROMIUM_DOWNLOAD is true but system Chrome not found - this may cause issues');
@@ -334,11 +337,16 @@ export const generatePdf = asyncHandler(async (req, res) => {
     } else {
       // Use bundled Puppeteer Chromium (will download if not present and not skipped)
       puppeteerInstance = puppeteer;
-      // CRITICAL: Don't set executablePath when using bundled Puppeteer
-      delete launchOptions.executablePath;
+      // CRITICAL: Remove executablePath completely - don't set it to undefined
+      // Puppeteer will use bundled Chromium when executablePath is not set
+      if ('executablePath' in launchOptions) {
+        delete launchOptions.executablePath;
+      }
       const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
       logger.info('Using bundled Puppeteer Chromium', { 
         skipDownload,
+        hasExecutablePath: 'executablePath' in launchOptions,
+        envPath: process.env.PUPPETEER_EXECUTABLE_PATH || 'not set',
         note: skipDownload ? 'Chromium download skipped - will attempt to use bundled Chromium' : 'Will use bundled Chromium'
       });
     }
@@ -406,10 +414,17 @@ export const generatePdf = asyncHandler(async (req, res) => {
           
           // Switch to bundled Puppeteer
           puppeteerInstance = puppeteer;
-          delete launchOptions.executablePath; // Remove executablePath for bundled version
+          // CRITICAL: Remove executablePath completely
+          if ('executablePath' in launchOptions) {
+            delete launchOptions.executablePath;
+          }
           triedBundledFallback = true;
           retries = maxRetries; // Reset retries for bundled attempt
-          logger.info('Retrying with bundled Puppeteer Chromium...');
+          logger.info('Retrying with bundled Puppeteer Chromium...', {
+            hasExecutablePath: 'executablePath' in launchOptions,
+            envPath: process.env.PUPPETEER_EXECUTABLE_PATH || 'not set',
+            note: 'Removed executablePath to use bundled Chromium'
+          });
           continue; // Retry immediately with bundled version
         }
         
