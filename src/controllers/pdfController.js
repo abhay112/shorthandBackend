@@ -47,7 +47,7 @@ function isExecutable(filePath) {
  * Works on: macOS, Linux (Ubuntu/Debian/Alpine), Windows, Docker
  * 
  * Strategy:
- * - Docker: Always try to use system Chromium (required)
+ * - Docker: Try system Chromium, fallback to bundled if not found
  * - Production Linux: Try system Chrome, fallback to bundled
  * - Local macOS/Windows: Prefer bundled Puppeteer (more reliable)
  */
@@ -60,9 +60,20 @@ function getChromeExecutablePath() {
   // CRITICAL: If env var is set but invalid, we MUST return undefined to use bundled Puppeteer
   if (process.env.CHROME_EXECUTABLE_PATH) {
     const envPath = process.env.CHROME_EXECUTABLE_PATH;
-    if (isExecutable(envPath)) {
-      logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { path: envPath });
-      return envPath;
+    // More thorough validation: check existence first, then executability
+    if (fs.existsSync(envPath)) {
+      try {
+        const stats = fs.statSync(envPath);
+        if (stats.isFile() && isExecutable(envPath)) {
+          logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { path: envPath });
+          return envPath;
+        }
+      } catch (error) {
+        logger.warn('Error checking CHROME_EXECUTABLE_PATH', { 
+          path: envPath, 
+          error: error.message 
+        });
+      }
     }
     // Env var set but path doesn't exist or isn't executable - IGNORE IT and use bundled
     logger.warn('CHROME_EXECUTABLE_PATH set but path is invalid - will use bundled Puppeteer Chromium', { 
@@ -298,20 +309,37 @@ export const generatePdf = asyncHandler(async (req, res) => {
     // Note: In Docker, system Chromium is installed, so we use puppeteer-core
     // On Ubuntu server without Chrome, we fall back to bundled Puppeteer Chromium
     let puppeteerInstance;
-    if (useSystemChrome) {
-      launchOptions.executablePath = chromeExecutablePath;
-      puppeteerInstance = puppeteerCore;
-      logger.info('Using puppeteer-core with system Chrome/Chromium', { 
-        path: chromeExecutablePath,
-        isDocker 
-      });
+    if (useSystemChrome && chromeExecutablePath) {
+      // Double-check the path exists before using it
+      if (fs.existsSync(chromeExecutablePath) && isExecutable(chromeExecutablePath)) {
+        launchOptions.executablePath = chromeExecutablePath;
+        puppeteerInstance = puppeteerCore;
+        logger.info('Using puppeteer-core with system Chrome/Chromium', { 
+          path: chromeExecutablePath,
+          isDocker 
+        });
+      } else {
+        // Path was detected but doesn't actually exist - fallback to bundled
+        logger.warn('System Chrome path detected but not accessible, falling back to bundled Puppeteer', {
+          attemptedPath: chromeExecutablePath,
+          exists: fs.existsSync(chromeExecutablePath)
+        });
+        puppeteerInstance = puppeteer;
+        delete launchOptions.executablePath; // Ensure no executablePath is set
+        const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
+        if (skipDownload) {
+          logger.warn('PUPPETEER_SKIP_CHROMIUM_DOWNLOAD is true but system Chrome not found - this may cause issues');
+        }
+      }
     } else {
       // Use bundled Puppeteer Chromium (will download if not present and not skipped)
       puppeteerInstance = puppeteer;
+      // CRITICAL: Don't set executablePath when using bundled Puppeteer
+      delete launchOptions.executablePath;
       const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
       logger.info('Using bundled Puppeteer Chromium', { 
         skipDownload,
-        note: skipDownload ? 'Chromium download skipped - ensure system Chrome is available' : 'Will use bundled Chromium'
+        note: skipDownload ? 'Chromium download skipped - will attempt to use bundled Chromium' : 'Will use bundled Chromium'
       });
     }
 

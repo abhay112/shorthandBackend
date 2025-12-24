@@ -58,11 +58,27 @@ RUN apk add --no-cache \
     && rm -rf /tmp/*
 
 # Create symlink for chromium-browser (Alpine uses chromium, but Puppeteer expects chromium-browser)
-RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
+# Verify Chromium is installed and create symlink with error handling
+RUN if [ -f /usr/bin/chromium ]; then \
+        ln -sf /usr/bin/chromium /usr/bin/chromium-browser && \
+        chmod +x /usr/bin/chromium-browser && \
+        echo "Chromium symlink created successfully"; \
+    else \
+        echo "WARNING: Chromium not found at /usr/bin/chromium"; \
+    fi
 
-# Set Chromium path for Puppeteer
+# Verify the symlink was created correctly
+RUN if [ -f /usr/bin/chromium-browser ]; then \
+        echo "✓ Chromium-browser symlink verified"; \
+        /usr/bin/chromium-browser --version || echo "Chromium found but may have dependency issues"; \
+    else \
+        echo "⚠ WARNING: chromium-browser symlink not found - Puppeteer will use bundled Chromium"; \
+    fi
+
+# Set Chromium path for Puppeteer (code will validate and fallback if not found)
+# Allow Puppeteer to download bundled Chromium as fallback if system Chrome fails
+# This ensures the app works even if Chromium installation has issues
 ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # Mark as Docker container for our detection logic
 ENV DOCKER_CONTAINER=true
