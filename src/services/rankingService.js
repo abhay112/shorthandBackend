@@ -45,7 +45,7 @@ const rankingService = {
     // Get rankings with pagination
     const rankings = await StudentRanking.find(filter)
       .populate('studentId', 'name email')
-      .populate('batchId', 'name description')
+      .populate('batchId', '_id name')
       .populate('testId', 'title category difficulty')
       .sort(sort)
       .skip(skip)
@@ -74,6 +74,7 @@ const rankingService = {
 
     const rankings = await StudentRanking.find(filter)
       .populate('studentId', 'name email')
+      .populate('batchId', '_id name')
       .populate('testId', 'title category difficulty')
       .sort({ rank: 1 })
       .skip(skip)
@@ -102,7 +103,8 @@ const rankingService = {
 
     const rankings = await StudentRanking.find(filter)
       .populate('studentId', 'name email')
-      .populate('batchId', 'name description')
+      .populate('batchId', '_id name')
+      .populate('testId', 'title category difficulty')
       .sort({ rank: 1 })
       .skip(skip)
       .limit(limit);
@@ -130,7 +132,7 @@ const rankingService = {
     const totalPages = Math.ceil(totalItems / limit);
 
     const rankings = await StudentRanking.find(filter)
-      .populate('batchId', 'name description')
+      .populate('batchId', '_id name')
       .populate('testId', 'title category difficulty')
       .sort({ testDate: -1 })
       .skip(skip)

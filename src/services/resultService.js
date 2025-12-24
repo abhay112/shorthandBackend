@@ -80,7 +80,7 @@ const resultService = {
     const results = await Result.find(filter)
       .populate('studentId', 'name email')
       .populate('testId', 'title category difficulty')
-      .populate('batchId', 'name')
+      .populate('batchId', '_id name')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
