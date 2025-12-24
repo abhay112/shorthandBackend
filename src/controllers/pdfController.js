@@ -57,17 +57,21 @@ function getChromeExecutablePath() {
   const isLocalDev = !isDocker && !isProduction;
   
   // Allow override via environment variable - BUT VALIDATE IT EXISTS AND IS EXECUTABLE
+  // CRITICAL: If env var is set but invalid, we MUST return undefined to use bundled Puppeteer
   if (process.env.CHROME_EXECUTABLE_PATH) {
     const envPath = process.env.CHROME_EXECUTABLE_PATH;
     if (isExecutable(envPath)) {
       logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { path: envPath });
       return envPath;
     }
-    // Env var set but path doesn't exist or isn't executable - log warning
-    logger.warn('CHROME_EXECUTABLE_PATH set but path is invalid, auto-detecting...', { 
+    // Env var set but path doesn't exist or isn't executable - IGNORE IT and use bundled
+    logger.warn('CHROME_EXECUTABLE_PATH set but path is invalid - will use bundled Puppeteer Chromium', { 
       configuredPath: envPath,
-      exists: fs.existsSync(envPath)
+      exists: fs.existsSync(envPath),
+      note: 'Invalid CHROME_EXECUTABLE_PATH ignored to prevent launch failures'
     });
+    // Return undefined to force bundled Puppeteer usage
+    return undefined;
   }
 
   // For local development (macOS/Windows), prefer bundled Puppeteer for reliability
@@ -120,7 +124,8 @@ function getChromeExecutablePath() {
 
   // Check if any common path exists and is executable
   for (const chromePath of commonPaths) {
-    if (isExecutable(chromePath)) {
+    // Double-check: path must exist AND be executable
+    if (fs.existsSync(chromePath) && isExecutable(chromePath)) {
       logger.info('Auto-detected Chrome/Chromium', { path: chromePath, isDocker, isProduction });
       return chromePath;
     }
@@ -130,7 +135,8 @@ function getChromeExecutablePath() {
   logger.info('No system Chrome/Chromium found, will use bundled Puppeteer Chromium', { 
     isDocker,
     isProduction,
-    platform: process.platform 
+    platform: process.platform,
+    checkedPaths: commonPaths.length
   });
   return undefined;
 }
@@ -225,6 +231,14 @@ export const generatePdf = asyncHandler(async (req, res) => {
     
     // Determine if we should use system Chrome or bundled Puppeteer
     const useSystemChrome = !!chromeExecutablePath;
+    
+    // Log the decision for debugging
+    logger.info('Chrome path detection result', {
+      chromeExecutablePath: chromeExecutablePath || 'none (using bundled)',
+      useSystemChrome,
+      isDocker,
+      envPath: process.env.CHROME_EXECUTABLE_PATH || 'not set'
+    });
     
     // Core args required for both environments (Puppeteer 24.x compatible)
     const coreArgs = [
@@ -341,16 +355,25 @@ export const generatePdf = asyncHandler(async (req, res) => {
       } catch (error) {
         lastError = error;
         const errorMessage = error.message || '';
-        const isBrowserNotFound = errorMessage.includes('browser') && 
-                                  (errorMessage.includes('not found') || 
-                                   errorMessage.includes('no executable') ||
-                                   errorMessage.includes('executable was not found'));
+        const errorString = errorMessage.toLowerCase();
+        
+        // Detect browser not found errors - be more lenient with pattern matching
+        const isBrowserNotFound = 
+          (errorString.includes('browser') && 
+           (errorString.includes('not found') || 
+            errorString.includes('no executable') ||
+            errorString.includes('executable was not found') ||
+            errorString.includes('tried to find'))) ||
+          errorString.includes('executable doesn\'t exist') ||
+          errorString.includes('cannot find') ||
+          (errorString.includes('chrome') && errorString.includes('not found'));
         
         // If system Chrome fails and we haven't tried bundled yet, fallback to bundled Puppeteer
         if (useSystemChrome && isBrowserNotFound && !triedBundledFallback) {
           logger.warn('System Chrome not found, falling back to bundled Puppeteer Chromium', {
             attemptedPath: chromeExecutablePath,
-            error: errorMessage
+            error: errorMessage,
+            isDocker
           });
           
           // Switch to bundled Puppeteer
@@ -358,6 +381,7 @@ export const generatePdf = asyncHandler(async (req, res) => {
           delete launchOptions.executablePath; // Remove executablePath for bundled version
           triedBundledFallback = true;
           retries = maxRetries; // Reset retries for bundled attempt
+          logger.info('Retrying with bundled Puppeteer Chromium...');
           continue; // Retry immediately with bundled version
         }
         
