@@ -1,3 +1,5 @@
+ssh -p 2222 root@46.202.167.20
+
 MAC
 
 # 1. Install Docker Desktop (if not installed)
