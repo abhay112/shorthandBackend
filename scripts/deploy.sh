@@ -1,23 +1,17 @@
 #!/bin/bash
 
 # ==========================================
-# Full Stack Setup Script - One-Click Deployment
+# One-Click Deployment Script
+# Shorthand Backend with Nginx Reverse Proxy
 # ==========================================
-# This script provides complete automated setup for:
+# This script provides complete automated deployment:
 #   - Docker & Docker Compose installation
 #   - Monitoring stack (Grafana, Prometheus, Loki)
 #   - Backend API deployment
 #   - Nginx reverse proxy configuration
 #   - SSL certificates setup
 #
-# Usage: sudo bash scripts/setup-full-stack.sh
-#
-# Features:
-#   - Zero-downtime deployment
-#   - Idempotent (safe to run multiple times)
-#   - Comprehensive error handling
-#   - Health checks and rollback capabilities
-#   - Edge case handling
+# Usage: sudo bash scripts/deploy.sh
 # ==========================================
 
 set -euo pipefail
@@ -41,13 +35,10 @@ PROMETHEUS_DOMAIN="${PROMETHEUS_DOMAIN:-prometheus.vikalpshorthand.com}"
 LOKI_DOMAIN="${LOKI_DOMAIN:-loki.vikalpshorthand.com}"
 
 # Ports
-BACKEND_PORT="${BACKEND_PORT:-5001}"
+BACKEND_PORT="5001"
 GRAFANA_PORT="3001"
 PROMETHEUS_PORT="9090"
 LOKI_PORT="3100"
-
-# Backup directory for rollback
-BACKUP_DIR="/tmp/shorthand-backup-$(date +%Y%m%d-%H%M%S)"
 
 # Logging functions
 log_info() {
@@ -77,7 +68,7 @@ log_step() {
 # Error handler
 error_exit() {
     log_error "$1"
-    log_warning "Setup failed. Check logs above for details."
+    log_warning "Deployment failed. Check logs above for details."
     exit 1
 }
 
@@ -159,14 +150,12 @@ install_base_utilities() {
         "curl"
         "wget"
         "git"
-        "vim"
         "ufw"
         "software-properties-common"
         "apt-transport-https"
         "ca-certificates"
         "gnupg"
         "lsb-release"
-        "htop"
         "jq"
     )
     
@@ -307,7 +296,6 @@ verify_project_files() {
     
     local required_files=(
         "docker-compose.prod.yml"
-        "prometheus.yml"
         "Dockerfile"
     )
     
@@ -327,6 +315,34 @@ verify_project_files() {
         error_exit "Please ensure all required files are present in the project directory"
     fi
     
+    # Check for prometheus.yml - create symlink if needed
+    if [ ! -f "$PROJECT_ROOT/prometheus.yml" ]; then
+        if [ -f "$PROJECT_ROOT/monitoring/prometheus/prometheus.yml" ]; then
+            log_info "Creating symlink for prometheus.yml..."
+            ln -sf "$PROJECT_ROOT/monitoring/prometheus/prometheus.yml" "$PROJECT_ROOT/prometheus.yml"
+            log_success "Prometheus config symlink created"
+        else
+            log_warning "prometheus.yml not found, creating default..."
+            cat > "$PROJECT_ROOT/prometheus.yml" <<EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: shorthnd-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 'backend:5001'
+EOF
+            log_success "Default prometheus.yml created"
+        fi
+    fi
+    
     # Check for .env file
     if [ ! -f "$PROJECT_ROOT/.env" ]; then
         if [ -f "$PROJECT_ROOT/env.production.template" ]; then
@@ -334,7 +350,7 @@ verify_project_files() {
             log_info "Creating .env from template..."
             cp "$PROJECT_ROOT/env.production.template" "$PROJECT_ROOT/.env"
             log_warning "Please edit .env file with your production values before continuing"
-            read -p "Press Enter after editing .env file..."
+            read -p "Press Enter after editing .env file (or Ctrl+C to exit)..."
         else
             error_exit ".env file not found and no template available"
         fi
@@ -343,25 +359,7 @@ verify_project_files() {
     log_success "Project files verified"
 }
 
-# Create backup
-create_backup() {
-    log_info "Creating backup directory: $BACKUP_DIR"
-    mkdir -p "$BACKUP_DIR"
-    
-    # Backup existing Nginx configs
-    if [ -d "$NGINX_SITES_AVAILABLE" ]; then
-        cp -r "$NGINX_SITES_AVAILABLE" "$BACKUP_DIR/nginx-sites-available" 2>/dev/null || true
-    fi
-    
-    # Backup existing Docker Compose
-    if [ -f "$PROJECT_ROOT/docker-compose.prod.yml" ]; then
-        cp "$PROJECT_ROOT/docker-compose.prod.yml" "$BACKUP_DIR/" 2>/dev/null || true
-    fi
-    
-    log_success "Backup created"
-}
-
-# Deploy monitoring stack with zero-downtime
+# Deploy monitoring stack
 deploy_monitoring_stack() {
     log_step "Step 9: Deploying Monitoring Stack"
     
@@ -369,49 +367,30 @@ deploy_monitoring_stack() {
     
     # Check if services are already running
     local services_running=false
-    if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    if docker-compose -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
         services_running=true
-        log_info "Existing services detected. Performing zero-downtime update..."
+        log_info "Existing services detected. Performing update..."
     fi
     
     # Pull latest images
     log_info "Pulling latest Docker images..."
     docker-compose -f docker-compose.prod.yml pull || log_warning "Some images failed to pull (may use cached versions)"
     
-    # Start services in dependency order (zero-downtime)
+    # Start services
     if [ "$services_running" = true ]; then
-        log_info "Updating services with zero-downtime strategy..."
-        
-        # Update Loki first (no dependencies)
-        log_info "Updating Loki..."
-        docker-compose -f docker-compose.prod.yml up -d --no-deps loki || true
-        wait_for_service "Loki" "$LOKI_PORT" "/ready" 30
-        
-        # Update Prometheus (depends on backend)
-        log_info "Updating Prometheus..."
-        docker-compose -f docker-compose.prod.yml up -d --no-deps prometheus || true
-        wait_for_service "Prometheus" "$PROMETHEUS_PORT" "/-/healthy" 30
-        
-        # Update Grafana (depends on Prometheus and Loki)
-        log_info "Updating Grafana..."
-        docker-compose -f docker-compose.prod.yml up -d --no-deps grafana || true
-        wait_for_service "Grafana" "$GRAFANA_PORT" "/api/health" 60
-        
-        # Update backend last (main service)
-        log_info "Updating Backend API..."
-        docker-compose -f docker-compose.prod.yml up -d --no-deps backend || true
-        wait_for_service "Backend API" "$BACKEND_PORT" "/" 60
+        log_info "Updating services..."
+        docker-compose -f docker-compose.prod.yml up -d
     else
         log_info "Starting services for the first time..."
         docker-compose -f docker-compose.prod.yml up -d
-        
-        # Wait for all services to be healthy
-        log_info "Waiting for services to be healthy..."
-        wait_for_service "Loki" "$LOKI_PORT" "/ready" 60
-        wait_for_service "Prometheus" "$PROMETHEUS_PORT" "/-/healthy" 60
-        wait_for_service "Grafana" "$GRAFANA_PORT" "/api/health" 90
-        wait_for_service "Backend API" "$BACKEND_PORT" "/" 90
     fi
+    
+    # Wait for all services to be healthy
+    log_info "Waiting for services to be healthy..."
+    wait_for_service "Loki" "$LOKI_PORT" "/ready" 60
+    wait_for_service "Prometheus" "$PROMETHEUS_PORT" "/-/healthy" 60
+    wait_for_service "Grafana" "$GRAFANA_PORT" "/api/health" 90
+    wait_for_service "Backend API" "$BACKEND_PORT" "/" 90
     
     log_success "Monitoring stack deployed"
 }
@@ -441,22 +420,182 @@ wait_for_service() {
     return 1
 }
 
+# Create Nginx config file
+create_nginx_config() {
+    local domain="$1"
+    local port="$2"
+    local config_name="$3"
+    local extra_config="${4:-}"
+    
+    local config_file="$NGINX_SITES_AVAILABLE/$domain"
+    
+    if [ -f "$config_file" ]; then
+        log_warning "Nginx config for $domain already exists: $config_file"
+        log_info "Skipping creation (to recreate, delete the file first)"
+        return 0
+    fi
+    
+    log_info "Creating Nginx config for $domain..."
+    
+    cat > "$config_file" <<EOF
+# $config_name Nginx Configuration
+# Domain: $domain
+# Backend: http://127.0.0.1:$port
+# Generated by deploy.sh
+
+server {
+    server_name $domain;
+
+    location / {
+        proxy_pass http://127.0.0.1:$port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+$extra_config
+    }
+
+    listen 80;
+}
+EOF
+    
+    log_success "Created Nginx config: $config_file"
+}
+
+# Create backend API config
+create_backend_config() {
+    create_nginx_config "$BACKEND_DOMAIN" "$BACKEND_PORT" "Backend API"
+}
+
+# Create Grafana config
+create_grafana_config() {
+    local extra_config="        # WebSocket support for Grafana
+        proxy_set_header Connection \"upgrade\";
+        proxy_read_timeout 86400;"
+    
+    create_nginx_config "$GRAFANA_DOMAIN" "$GRAFANA_PORT" "Grafana" "$extra_config"
+}
+
+# Create Prometheus config
+create_prometheus_config() {
+    local extra_config="        # Prometheus specific settings
+        proxy_read_timeout 300;
+        proxy_connect_timeout 75;"
+    
+    create_nginx_config "$PROMETHEUS_DOMAIN" "$PROMETHEUS_PORT" "Prometheus" "$extra_config"
+}
+
+# Create Loki config
+create_loki_config() {
+    local extra_config="        # Loki specific settings
+        proxy_read_timeout 300;
+        proxy_connect_timeout 75;"
+    
+    create_nginx_config "$LOKI_DOMAIN" "$LOKI_PORT" "Loki" "$extra_config"
+}
+
+# Enable Nginx site
+enable_nginx_site() {
+    local domain="$1"
+    local config_file="$NGINX_SITES_AVAILABLE/$domain"
+    local symlink="$NGINX_SITES_ENABLED/$domain"
+    
+    if [ ! -f "$config_file" ]; then
+        log_error "Config file not found: $config_file"
+        return 1
+    fi
+    
+    if [ -L "$symlink" ]; then
+        log_info "Site $domain is already enabled"
+        return 0
+    fi
+    
+    log_info "Enabling site: $domain"
+    ln -sf "$config_file" "$symlink"
+    log_success "Enabled site: $domain"
+}
+
+# Test Nginx configuration
+test_nginx_config() {
+    log_info "Testing Nginx configuration..."
+    if nginx -t >/dev/null 2>&1; then
+        log_success "Nginx configuration is valid"
+        return 0
+    else
+        log_error "Nginx configuration has errors"
+        return 1
+    fi
+}
+
+# Reload Nginx
+reload_nginx() {
+    log_info "Reloading Nginx..."
+    if systemctl reload nginx >/dev/null 2>&1; then
+        log_success "Nginx reloaded successfully"
+    else
+        log_error "Failed to reload Nginx"
+        return 1
+    fi
+}
+
+# Setup SSL certificate
+setup_ssl_certificate() {
+    local domain="$1"
+    
+    # Check if certificate already exists
+    if [ -d "/etc/letsencrypt/live/$domain" ]; then
+        log_info "SSL certificate for $domain already exists"
+        return 0
+    fi
+    
+    log_info "Setting up SSL certificate for $domain..."
+    
+    # Check if domain resolves
+    if ! host "$domain" >/dev/null 2>&1; then
+        log_warning "Domain $domain does not resolve. Skipping..."
+        return 1
+    fi
+    
+    # Run certbot
+    if certbot --nginx -d "$domain" --non-interactive --agree-tos --redirect 2>&1 | tee /tmp/certbot-$domain.log; then
+        log_success "SSL certificate installed for $domain"
+        return 0
+    else
+        log_warning "Failed to install SSL certificate for $domain"
+        log_warning "You may need to run manually: sudo certbot --nginx -d $domain"
+        return 1
+    fi
+}
+
 # Setup Nginx configurations
 setup_nginx_configs() {
     log_step "Step 10: Setting Up Nginx Configurations"
     
-    # Change to project root for nginx setup script
-    cd "$PROJECT_ROOT" || error_exit "Failed to change to project directory"
+    # Create configurations
+    log_info "Creating Nginx configurations..."
+    create_backend_config
+    create_grafana_config
+    create_prometheus_config
+    create_loki_config
     
-    # Source the nginx setup script
-    if [ -f "$SCRIPT_DIR/setup-nginx-monitoring.sh" ]; then
-        log_info "Running Nginx configuration script..."
-        bash "$SCRIPT_DIR/setup-nginx-monitoring.sh" || error_exit "Nginx configuration failed"
+    # Enable sites
+    log_info "Enabling Nginx sites..."
+    enable_nginx_site "$BACKEND_DOMAIN"
+    enable_nginx_site "$GRAFANA_DOMAIN"
+    enable_nginx_site "$PROMETHEUS_DOMAIN"
+    enable_nginx_site "$LOKI_DOMAIN"
+    
+    # Test and reload
+    if test_nginx_config; then
+        reload_nginx
+        log_success "Nginx configurations created and enabled"
     else
-        error_exit "Nginx setup script not found: $SCRIPT_DIR/setup-nginx-monitoring.sh"
+        error_exit "Nginx configuration test failed"
     fi
-    
-    log_success "Nginx configurations created"
 }
 
 # Setup SSL certificates (optional)
@@ -484,28 +623,11 @@ setup_ssl_certificates() {
     local domains=("$BACKEND_DOMAIN" "$GRAFANA_DOMAIN" "$PROMETHEUS_DOMAIN" "$LOKI_DOMAIN")
     
     for domain in "${domains[@]}"; do
-        if [ -d "/etc/letsencrypt/live/$domain" ]; then
-            log_info "SSL certificate for $domain already exists"
-            continue
-        fi
-        
-        log_info "Setting up SSL certificate for $domain..."
-        
-        if ! host "$domain" >/dev/null 2>&1; then
-            log_warning "Domain $domain does not resolve. Skipping..."
-            continue
-        fi
-        
-        if certbot --nginx -d "$domain" --non-interactive --agree-tos --redirect 2>&1 | tee /tmp/certbot-$domain.log; then
-            log_success "SSL certificate installed for $domain"
-        else
-            log_warning "Failed to install SSL certificate for $domain"
-            log_warning "You may need to run manually: sudo certbot --nginx -d $domain"
-        fi
+        setup_ssl_certificate "$domain" || true
     done
     
     # Reload Nginx after SSL setup
-    systemctl reload nginx >/dev/null 2>&1 || true
+    reload_nginx
     
     log_success "SSL certificate setup completed"
 }
@@ -534,7 +656,7 @@ verify_deployment() {
     
     # Check Docker containers
     log_info "Checking Docker containers..."
-    if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    if docker-compose -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
         log_success "All Docker containers are running"
     else
         log_warning "Some Docker containers may not be running"
@@ -587,9 +709,6 @@ print_summary() {
     echo "  - Stop services:    docker-compose -f docker-compose.prod.yml down"
     echo "  - View status:      docker-compose -f docker-compose.prod.yml ps"
     echo ""
-    
-    echo "Backup location: $BACKUP_DIR"
-    echo ""
 }
 
 # Main function
@@ -597,17 +716,14 @@ main() {
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║                                                          ║${NC}"
-    echo -e "${GREEN}║     Full Stack Setup - One-Click Deployment            ║${NC}"
-    echo -e "${GREEN}║     Shorthand Backend + Monitoring Stack                ║${NC}"
+    echo -e "${GREEN}║     One-Click Deployment Script                        ║${NC}"
+    echo -e "${GREEN}║     Shorthand Backend + Monitoring + Nginx               ║${NC}"
     echo -e "${GREEN}║                                                          ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
     check_root
     check_os
-    
-    # Create backup before making changes
-    create_backup
     
     # Run setup steps
     update_system
