@@ -16,43 +16,122 @@ const __dirname = path.dirname(__filename);
 const templatePath = path.join(__dirname, '..', 'views', 'template.html');
 
 /**
+ * Check if a file exists and is executable
+ */
+function isExecutable(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+    // Check if it's a file (not a directory)
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    // On Unix-like systems, check if executable
+    // On Windows, if file exists, assume it's executable
+    if (process.platform === 'win32') {
+      return true;
+    }
+    // Check read permission (basic check)
+    fs.accessSync(filePath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get Chrome/Chromium executable path based on OS
  * Auto-detects Chrome installation or uses bundled Chromium
+ * Works on: macOS, Linux (Ubuntu/Debian/Alpine), Windows, Docker
+ * 
+ * Strategy:
+ * - Docker: Always try to use system Chromium (required)
+ * - Production Linux: Try system Chrome, fallback to bundled
+ * - Local macOS/Windows: Prefer bundled Puppeteer (more reliable)
  */
 function getChromeExecutablePath() {
-  // Allow override via environment variable - BUT VALIDATE IT EXISTS
+  const isDocker = fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const isLocalDev = !isDocker && !isProduction;
+  
+  // Allow override via environment variable - BUT VALIDATE IT EXISTS AND IS EXECUTABLE
   if (process.env.CHROME_EXECUTABLE_PATH) {
     const envPath = process.env.CHROME_EXECUTABLE_PATH;
-    if (fs.existsSync(envPath)) {
+    if (isExecutable(envPath)) {
+      logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { path: envPath });
       return envPath;
     }
-    // Env var set but path doesn't exist - log warning and continue to auto-detect
-    logger.warn('CHROME_EXECUTABLE_PATH set but path does not exist, auto-detecting...', { 
-      configuredPath: envPath 
+    // Env var set but path doesn't exist or isn't executable - log warning
+    logger.warn('CHROME_EXECUTABLE_PATH set but path is invalid, auto-detecting...', { 
+      configuredPath: envPath,
+      exists: fs.existsSync(envPath)
     });
   }
 
-  // For production/Docker, try common paths (Alpine Linux first for Docker)
-  const commonPaths = [
-    '/usr/bin/chromium-browser', // Alpine Linux (Docker)
-    '/usr/bin/chromium', // Alpine Linux alternative
-    '/usr/bin/google-chrome-stable', // Debian/Ubuntu
-    '/usr/bin/chromium-browser', // Debian/Ubuntu alternative
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', // Windows 32-bit
-  ];
+  // For local development (macOS/Windows), prefer bundled Puppeteer for reliability
+  if (isLocalDev) {
+    logger.info('Local development detected - will use bundled Puppeteer Chromium for better compatibility', {
+      platform: process.platform
+    });
+    return undefined;
+  }
 
-  // Check if any common path exists
+  // Build path list based on environment
+  const commonPaths = [];
+  
+  if (isDocker) {
+    // Docker/Alpine Linux paths (most likely)
+    commonPaths.push(
+      '/usr/bin/chromium-browser', // Alpine symlink
+      '/usr/bin/chromium', // Alpine direct
+      '/usr/bin/chrome', // Alternative
+      '/usr/bin/google-chrome-stable' // Debian/Ubuntu in Docker
+    );
+  } else {
+    // Non-Docker production environments - try OS-specific paths
+    if (process.platform === 'darwin') {
+      // macOS (production)
+      commonPaths.push(
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium'
+      );
+    } else if (process.platform === 'linux') {
+      // Linux (Ubuntu/Debian/etc) - production server
+      commonPaths.push(
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/chrome',
+        '/snap/bin/chromium', // Snap package
+        '/opt/google/chrome/chrome' // Alternative location
+      );
+    } else if (process.platform === 'win32') {
+      // Windows (production)
+      commonPaths.push(
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe'
+      );
+    }
+  }
+
+  // Check if any common path exists and is executable
   for (const chromePath of commonPaths) {
-    if (fs.existsSync(chromePath)) {
-      logger.info('Auto-detected Chrome at', { path: chromePath });
+    if (isExecutable(chromePath)) {
+      logger.info('Auto-detected Chrome/Chromium', { path: chromePath, isDocker, isProduction });
       return chromePath;
     }
   }
 
-  // Return undefined to let Puppeteer use bundled Chromium
-  logger.info('No system Chrome found, will use bundled Puppeteer Chromium');
+  // No system Chrome found - will use bundled Puppeteer Chromium
+  logger.info('No system Chrome/Chromium found, will use bundled Puppeteer Chromium', { 
+    isDocker,
+    isProduction,
+    platform: process.platform 
+  });
   return undefined;
 }
 
@@ -199,15 +278,27 @@ export const generatePdf = asyncHandler(async (req, res) => {
       dumpio: process.env.PUPPETEER_DEBUG === 'true',
     };
 
-    // Use puppeteer-core with system Chrome in Docker, regular puppeteer locally
+    // Choose Puppeteer instance:
+    // - If system Chrome found: use puppeteer-core (lighter, uses system Chrome)
+    // - If no system Chrome: use puppeteer (includes bundled Chromium)
+    // Note: In Docker, system Chromium is installed, so we use puppeteer-core
+    // On Ubuntu server without Chrome, we fall back to bundled Puppeteer Chromium
     let puppeteerInstance;
     if (useSystemChrome) {
       launchOptions.executablePath = chromeExecutablePath;
       puppeteerInstance = puppeteerCore;
-      logger.info('Using puppeteer-core with system Chromium', { path: chromeExecutablePath });
+      logger.info('Using puppeteer-core with system Chrome/Chromium', { 
+        path: chromeExecutablePath,
+        isDocker 
+      });
     } else {
+      // Use bundled Puppeteer Chromium (will download if not present and not skipped)
       puppeteerInstance = puppeteer;
-      logger.info('Using bundled Puppeteer Chromium');
+      const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
+      logger.info('Using bundled Puppeteer Chromium', { 
+        skipDownload,
+        note: skipDownload ? 'Chromium download skipped - ensure system Chrome is available' : 'Will use bundled Chromium'
+      });
     }
 
     logger.info('Launching browser for PDF generation', {
@@ -219,10 +310,11 @@ export const generatePdf = asyncHandler(async (req, res) => {
       argsCount: launchOptions.args.length,
     });
 
-    // Launch browser with retry logic
+    // Launch browser with retry logic and automatic fallback to bundled Chromium
     const maxRetries = isDocker ? 3 : 2;
     let retries = maxRetries;
     let lastError = null;
+    let triedBundledFallback = false;
     
     while (retries > 0) {
       try {
@@ -248,9 +340,32 @@ export const generatePdf = asyncHandler(async (req, res) => {
         break; // Success, exit retry loop
       } catch (error) {
         lastError = error;
+        const errorMessage = error.message || '';
+        const isBrowserNotFound = errorMessage.includes('browser') && 
+                                  (errorMessage.includes('not found') || 
+                                   errorMessage.includes('no executable') ||
+                                   errorMessage.includes('executable was not found'));
+        
+        // If system Chrome fails and we haven't tried bundled yet, fallback to bundled Puppeteer
+        if (useSystemChrome && isBrowserNotFound && !triedBundledFallback) {
+          logger.warn('System Chrome not found, falling back to bundled Puppeteer Chromium', {
+            attemptedPath: chromeExecutablePath,
+            error: errorMessage
+          });
+          
+          // Switch to bundled Puppeteer
+          puppeteerInstance = puppeteer;
+          delete launchOptions.executablePath; // Remove executablePath for bundled version
+          triedBundledFallback = true;
+          retries = maxRetries; // Reset retries for bundled attempt
+          continue; // Retry immediately with bundled version
+        }
+        
         retries--;
         logger.warn(`Browser launch attempt failed, retries left: ${retries}`, { 
-          error: error.message,
+          error: errorMessage,
+          useSystemChrome,
+          triedBundledFallback,
           stack: error.stack?.split('\n').slice(0, 3).join('\n')
         });
         
