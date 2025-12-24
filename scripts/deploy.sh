@@ -608,6 +608,42 @@ deploy_backend_pm2() {
     pm2 status
 }
 
+# Get Docker bridge gateway IP for Prometheus to reach host
+get_docker_gateway_ip() {
+    # Try to get Docker bridge gateway IP
+    local gateway_ip=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | head -1)
+    
+    if [ -z "$gateway_ip" ] || [ "$gateway_ip" = "<no value>" ]; then
+        # Fallback to default Docker bridge gateway
+        gateway_ip="172.17.0.1"
+    fi
+    
+    echo "$gateway_ip"
+}
+
+# Update Prometheus config with correct host IP
+update_prometheus_config() {
+    log_info "Updating Prometheus configuration for host backend..."
+    
+    local gateway_ip=$(get_docker_gateway_ip)
+    local prometheus_config="$PROJECT_ROOT/monitoring/prometheus/prometheus.yml"
+    
+    if [ -f "$prometheus_config" ]; then
+        # Update the backend target with the gateway IP
+        if grep -q "host.docker.internal:5001" "$prometheus_config"; then
+            sed -i "s|host.docker.internal:5001|$gateway_ip:5001|g" "$prometheus_config"
+            log_info "Updated Prometheus config to use Docker gateway IP: $gateway_ip"
+        elif grep -q "172.17.0.1:5001" "$prometheus_config"; then
+            sed -i "s|172.17.0.1:5001|$gateway_ip:5001|g" "$prometheus_config"
+            log_info "Updated Prometheus config to use Docker gateway IP: $gateway_ip"
+        fi
+        
+        log_info "Prometheus will scrape backend at: $gateway_ip:5001"
+    else
+        log_warning "Prometheus config file not found: $prometheus_config"
+    fi
+}
+
 # Deploy monitoring stack (without backend)
 deploy_monitoring_stack() {
     log_step "Step 10: Deploying Monitoring Stack"
@@ -615,6 +651,9 @@ deploy_monitoring_stack() {
     cd "$PROJECT_ROOT" || error_exit "Failed to change to project directory"
     
     local compose_cmd=$(get_docker_compose_cmd)
+    
+    # Update Prometheus config with correct host IP
+    update_prometheus_config
     
     # Check if services are already running
     local services_running=false
@@ -635,17 +674,36 @@ deploy_monitoring_stack() {
     # Start monitoring services
     if [ "$services_running" = true ]; then
         log_info "Updating monitoring services..."
-        $compose_cmd -f docker-compose.monitoring.yml up -d --force-recreate
+        # Force recreate Prometheus to pick up new config
+        $compose_cmd -f docker-compose.monitoring.yml up -d --force-recreate prometheus
+        $compose_cmd -f docker-compose.monitoring.yml up -d
     else
         log_info "Starting monitoring services for the first time..."
         $compose_cmd -f docker-compose.monitoring.yml up -d
     fi
+    
+    # Reload Prometheus configuration
+    log_info "Reloading Prometheus configuration..."
+    sleep 3
+    curl -X POST http://127.0.0.1:9090/-/reload 2>/dev/null || log_warning "Prometheus reload failed (may need manual restart)"
     
     # Wait for monitoring services to be healthy
     log_info "Waiting for monitoring services to be healthy..."
     wait_for_service "Loki" "$LOKI_PORT" "/ready" 60
     wait_for_service "Prometheus" "$PROMETHEUS_PORT" "/-/healthy" 60
     wait_for_service "Grafana" "$GRAFANA_PORT" "/api/health" 90
+    
+    # Verify Prometheus can scrape backend
+    log_info "Verifying Prometheus can reach backend..."
+    sleep 5
+    local gateway_ip=$(get_docker_gateway_ip)
+    if curl -sf "http://$gateway_ip:5001/metrics" >/dev/null 2>&1; then
+        log_success "Prometheus can reach backend at $gateway_ip:5001"
+    else
+        log_warning "Prometheus may not be able to reach backend. Check connectivity."
+        log_info "Backend should be accessible at: http://$gateway_ip:5001/metrics"
+        log_info "You can test with: curl http://$gateway_ip:5001/metrics"
+    fi
     
     log_success "Monitoring stack deployed"
 }

@@ -11,5 +11,6 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - 'host.docker.internal:5001'  # Backend running on host with PM2
+          - '172.17.0.1:5001'  # Docker bridge gateway (backend running on host with PM2)
+          # Alternative: Use host.docker.internal if supported, or actual host IP
 
