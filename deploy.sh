@@ -96,7 +96,7 @@ echo ""
 echo -e "${YELLOW}Checking service health...${NC}"
 
 # Check backend
-if curl -f -s http://localhost:3000/ > /dev/null; then
+if curl -f -s http://localhost:5001/ > /dev/null; then
     echo -e "${GREEN}✓ Backend is healthy${NC}"
 else
     echo -e "${RED}❌ Backend is not responding${NC}"

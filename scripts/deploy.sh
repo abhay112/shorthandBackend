@@ -485,17 +485,36 @@ deploy_monitoring_stack() {
         log_info "Existing services detected. Performing update..."
     fi
     
-    # Pull latest images
+    # Ensure PORT is set correctly in .env file (docker-compose will override, but good to have it correct)
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        if grep -q "^PORT=" "$PROJECT_ROOT/.env"; then
+            # Update PORT if it's not 5001
+            if ! grep -q "^PORT=5001" "$PROJECT_ROOT/.env"; then
+                log_info "Updating PORT in .env file to 5001..."
+                sed -i 's/^PORT=.*/PORT=5001/' "$PROJECT_ROOT/.env"
+            fi
+        else
+            log_info "Adding PORT=5001 to .env file..."
+            echo "PORT=5001" >> "$PROJECT_ROOT/.env"
+        fi
+    fi
+    
+    # Pull latest images for services that use pre-built images
     log_info "Pulling latest Docker images..."
     $compose_cmd -f docker-compose.prod.yml pull || log_warning "Some images failed to pull (may use cached versions)"
     
-    # Start services
+    # Build backend image (it has a build section)
+    log_info "Building backend Docker image..."
+    $compose_cmd -f docker-compose.prod.yml build --no-cache backend || log_warning "Backend build had warnings"
+    
+    # Start services (--build ensures backend is built, --force-recreate ensures new env vars are used)
     if [ "$services_running" = true ]; then
         log_info "Updating services..."
+        $compose_cmd -f docker-compose.prod.yml up -d --build --force-recreate backend
         $compose_cmd -f docker-compose.prod.yml up -d
     else
         log_info "Starting services for the first time..."
-        $compose_cmd -f docker-compose.prod.yml up -d
+        $compose_cmd -f docker-compose.prod.yml up -d --build
     fi
     
     # Wait for all services to be healthy
