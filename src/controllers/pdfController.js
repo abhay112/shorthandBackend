@@ -78,19 +78,13 @@ function getChromeExecutablePath() {
   if (process.env.CHROME_EXECUTABLE_PATH) {
     const envPath = process.env.CHROME_EXECUTABLE_PATH;
     // More thorough validation: check existence first, then executability
-    if (fs.existsSync(envPath)) {
-      try {
-        const stats = fs.statSync(envPath);
-        if (stats.isFile() && isExecutable(envPath)) {
-          logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { path: envPath });
-          return envPath;
-        }
-      } catch (error) {
-        logger.warn('Error checking CHROME_EXECUTABLE_PATH', { 
-          path: envPath, 
-          error: error.message 
-        });
-      }
+    // Use isExecutable which handles both files and symlinks
+    if (isExecutable(envPath)) {
+      logger.info('Using Chrome from CHROME_EXECUTABLE_PATH', { 
+        path: envPath,
+        isSymlink: fs.existsSync(envPath) && fs.lstatSync(envPath).isSymbolicLink()
+      });
+      return envPath;
     }
     // Env var set but path doesn't exist or isn't executable - IGNORE IT and use bundled
     logger.warn('CHROME_EXECUTABLE_PATH set but path is invalid - will use bundled Puppeteer Chromium', { 
@@ -278,7 +272,9 @@ export const generatePdf = asyncHandler(async (req, res) => {
       chromeExecutablePath: chromeExecutablePath || 'none (using bundled)',
       useSystemChrome,
       isDocker,
-      envPath: process.env.CHROME_EXECUTABLE_PATH || 'not set'
+      envPath: process.env.CHROME_EXECUTABLE_PATH || 'not set',
+      envPathExists: process.env.CHROME_EXECUTABLE_PATH ? fs.existsSync(process.env.CHROME_EXECUTABLE_PATH) : false,
+      envPathExecutable: process.env.CHROME_EXECUTABLE_PATH ? isExecutable(process.env.CHROME_EXECUTABLE_PATH) : false
     });
     
     // Core args required for both environments (Puppeteer 24.x compatible)
@@ -366,6 +362,8 @@ export const generatePdf = asyncHandler(async (req, res) => {
       }
     } else {
       // Use bundled Puppeteer Chromium (will download if not present and not skipped)
+      // NOTE: In Alpine Linux (musl), Puppeteer's bundled Chrome (glibc) won't work
+      // System Chromium should be used instead - if we reach here, something is wrong
       puppeteerInstance = puppeteer;
       // CRITICAL: Remove executablePath completely - don't set it to undefined
       // Puppeteer will use bundled Chromium when executablePath is not set
@@ -373,12 +371,24 @@ export const generatePdf = asyncHandler(async (req, res) => {
         delete launchOptions.executablePath;
       }
       const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
-      logger.info('Using bundled Puppeteer Chromium', { 
-        skipDownload,
-        hasExecutablePath: 'executablePath' in launchOptions,
-        envPath: process.env.PUPPETEER_EXECUTABLE_PATH || 'not set',
-        note: skipDownload ? 'Chromium download skipped - will attempt to use bundled Chromium' : 'Will use bundled Chromium'
-      });
+      const isAlpine = fs.existsSync('/etc/alpine-release');
+      
+      if (isAlpine && skipDownload) {
+        logger.error('CRITICAL: In Alpine Linux, system Chromium must be used. Bundled Puppeteer Chrome (glibc) will not work!', {
+          isDocker,
+          isAlpine,
+          skipDownload,
+          checkedPaths: ['/usr/bin/chromium-browser', '/usr/bin/chromium'],
+          note: 'System Chromium should be installed and detected. Check Dockerfile Chromium installation.'
+        });
+      } else {
+        logger.info('Using bundled Puppeteer Chromium', { 
+          skipDownload,
+          hasExecutablePath: 'executablePath' in launchOptions,
+          envPath: process.env.PUPPETEER_EXECUTABLE_PATH || 'not set',
+          note: skipDownload ? 'Chromium download skipped - will attempt to use bundled Chromium' : 'Will use bundled Chromium'
+        });
+      }
     }
 
     logger.info('Launching browser for PDF generation', {

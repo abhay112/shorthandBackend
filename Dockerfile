@@ -67,12 +67,18 @@ RUN rm -f /usr/bin/chromium-browser && \
         echo "WARNING: Chromium not found at /usr/bin/chromium"; \
     fi
 
-# Verify the symlink was created correctly
+# Verify the symlink was created correctly and Chromium is executable
 RUN if [ -L /usr/bin/chromium-browser ] || [ -f /usr/bin/chromium-browser ]; then \
         echo "✓ Chromium-browser symlink verified"; \
-        /usr/bin/chromium-browser --version 2>/dev/null || echo "Chromium found but may have dependency issues"; \
+        if [ -x /usr/bin/chromium-browser ]; then \
+            echo "✓ Chromium-browser is executable"; \
+            /usr/bin/chromium-browser --version 2>&1 | head -1 || echo "Note: Chromium version check had issues but file exists"; \
+        else \
+            echo "⚠ WARNING: chromium-browser exists but is not executable"; \
+            chmod +x /usr/bin/chromium-browser 2>/dev/null || echo "Could not make executable"; \
+        fi; \
     else \
-        echo "⚠ WARNING: chromium-browser symlink not found - Puppeteer will use bundled Chromium"; \
+        echo "⚠ WARNING: chromium-browser symlink not found"; \
     fi
 
 # Set Chromium path for our code to detect (code will validate and fallback if not found)
@@ -104,11 +110,10 @@ RUN mkdir -p /home/nodejs/.cache/puppeteer && \
 # Switch to non-root user for Puppeteer installation
 USER nodejs
 
-# Install Puppeteer's bundled Chromium as fallback
-# This ensures bundled Chromium is available if system Chromium fails
-# Run as nodejs user to ensure proper permissions
-RUN cd /app && \
-    npx puppeteer browsers install chrome 2>&1 || echo "Note: Puppeteer Chromium installation completed or will use system Chromium"
+# Note: Puppeteer's bundled Chrome is compiled for glibc and won't work in Alpine (musl)
+# We rely on system Chromium which is already installed above
+# Skip Puppeteer Chromium download to save build time and space
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Expose port
 EXPOSE 5001
