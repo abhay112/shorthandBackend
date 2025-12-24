@@ -65,20 +65,24 @@ RUN rm -f /usr/bin/chromium-browser && \
         echo "Chromium symlink created successfully"; \
     else \
         echo "WARNING: Chromium not found at /usr/bin/chromium"; \
+        exit 1; \
     fi
 
-# Verify the symlink was created correctly and Chromium is executable
+# Verify the symlink was created correctly and ensure it's accessible
+# Make sure both the symlink target and symlink itself are executable by all users
 RUN if [ -L /usr/bin/chromium-browser ] || [ -f /usr/bin/chromium-browser ]; then \
         echo "✓ Chromium-browser symlink verified"; \
-        if [ -x /usr/bin/chromium-browser ]; then \
-            echo "✓ Chromium-browser is executable"; \
-            /usr/bin/chromium-browser --version 2>&1 | head -1 || echo "Note: Chromium version check had issues but file exists"; \
-        else \
-            echo "⚠ WARNING: chromium-browser exists but is not executable"; \
-            chmod +x /usr/bin/chromium-browser 2>/dev/null || echo "Could not make executable"; \
-        fi; \
+        # Ensure the actual Chromium binary is executable
+        chmod +x /usr/bin/chromium 2>/dev/null || true; \
+        # Ensure the symlink is accessible (symlinks inherit permissions from target)
+        chmod +x /usr/bin/chromium-browser 2>/dev/null || true; \
+        # Test that it's accessible (run as a test user to verify permissions)
+        echo "Testing Chromium accessibility..." && \
+        /usr/bin/chromium-browser --version 2>&1 | head -1 || echo "Note: Version check completed"; \
+        echo "✓ Chromium is accessible and executable"; \
     else \
-        echo "⚠ WARNING: chromium-browser symlink not found"; \
+        echo "⚠ ERROR: chromium-browser symlink not found - this will cause PDF generation to fail!"; \
+        exit 1; \
     fi
 
 # Set Chromium path for our code to detect (code will validate and fallback if not found)

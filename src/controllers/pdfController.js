@@ -146,19 +146,53 @@ function getChromeExecutablePath() {
 
   // Check if any common path exists and is executable
   for (const chromePath of commonPaths) {
-    // Double-check: path must exist AND be executable
+    // Check if path exists
     if (fs.existsSync(chromePath)) {
       try {
-        if (isExecutable(chromePath)) {
-          logger.info('Auto-detected Chrome/Chromium', { 
-            path: chromePath, 
-            isDocker, 
-            isProduction,
-            isSymlink: fs.lstatSync(chromePath).isSymbolicLink()
-          });
-          return chromePath;
-        } else {
-          logger.debug('Chrome path exists but not executable', { path: chromePath });
+        // Check if it's a symlink and resolve it
+        const lstats = fs.lstatSync(chromePath);
+        const isSymlink = lstats.isSymbolicLink();
+        let realPath = chromePath;
+        
+        if (isSymlink) {
+          try {
+            realPath = fs.realpathSync(chromePath);
+            logger.debug('Resolved symlink', { symlink: chromePath, target: realPath });
+          } catch (error) {
+            logger.debug('Symlink resolution failed', { path: chromePath, error: error.message });
+            continue; // Skip broken symlinks
+          }
+        }
+        
+        // Check if the actual file exists
+        // Be lenient - if file exists, use it (Puppeteer will fail gracefully if not executable)
+        if (fs.existsSync(realPath)) {
+          const stats = fs.statSync(realPath);
+          if (stats.isFile()) {
+            // Try to check if executable, but don't fail if check fails
+            // In Docker/Alpine, we know Chromium is installed, so trust it exists
+            let executable = false;
+            try {
+              executable = isExecutable(chromePath);
+            } catch (error) {
+              logger.debug('Executable check failed, will try anyway', { path: chromePath, error: error.message });
+              // In Docker, assume it's executable if file exists
+              if (isDocker) {
+                executable = true;
+              }
+            }
+            
+            logger.info('Auto-detected Chrome/Chromium', { 
+              path: chromePath,
+              realPath: realPath,
+              isDocker, 
+              isProduction,
+              isSymlink,
+              isExecutable: executable,
+              note: executable ? 'Verified executable' : 'Will attempt to use (file exists, assuming executable in Docker)'
+            });
+            return chromePath;
+          }
         }
       } catch (error) {
         logger.debug('Error checking Chrome path', { path: chromePath, error: error.message });
@@ -167,11 +201,15 @@ function getChromeExecutablePath() {
   }
 
   // No system Chrome found - will use bundled Puppeteer Chromium
-  logger.info('No system Chrome/Chromium found, will use bundled Puppeteer Chromium', { 
+  // In Alpine/Docker, this is a problem since bundled Chrome won't work
+  const isAlpine = fs.existsSync('/etc/alpine-release');
+  logger.warn('No system Chrome/Chromium found, will use bundled Puppeteer Chromium', { 
     isDocker,
     isProduction,
+    isAlpine,
     platform: process.platform,
-    checkedPaths: commonPaths.length
+    checkedPaths: commonPaths,
+    note: isAlpine ? 'WARNING: Bundled Puppeteer Chrome (glibc) will NOT work in Alpine (musl)!' : 'Will attempt bundled Chrome'
   });
   return undefined;
 }
@@ -336,28 +374,36 @@ export const generatePdf = asyncHandler(async (req, res) => {
     // On Ubuntu server without Chrome, we fall back to bundled Puppeteer Chromium
     let puppeteerInstance;
     if (useSystemChrome && chromeExecutablePath) {
-      // Double-check the path exists before using it
-      if (fs.existsSync(chromeExecutablePath) && isExecutable(chromeExecutablePath)) {
+      // Double-check the path exists - be more lenient, let Puppeteer handle execution
+      // The path was already validated by getChromeExecutablePath()
+      if (fs.existsSync(chromeExecutablePath)) {
         launchOptions.executablePath = chromeExecutablePath;
         puppeteerInstance = puppeteerCore;
         logger.info('Using puppeteer-core with system Chrome/Chromium', { 
           path: chromeExecutablePath,
-          isDocker 
+          isDocker,
+          exists: true,
+          isExecutable: isExecutable(chromeExecutablePath),
+          isSymlink: fs.lstatSync(chromeExecutablePath).isSymbolicLink()
         });
       } else {
-        // Path was detected but doesn't actually exist - fallback to bundled
-        logger.warn('System Chrome path detected but not accessible, falling back to bundled Puppeteer', {
+        // Path was detected but doesn't actually exist - this shouldn't happen
+        logger.error('CRITICAL: System Chrome path was detected but no longer exists!', {
           attemptedPath: chromeExecutablePath,
-          exists: fs.existsSync(chromeExecutablePath)
+          exists: fs.existsSync(chromeExecutablePath),
+          note: 'This indicates a configuration issue'
         });
+        // In Alpine, we MUST use system Chromium - don't fallback to bundled
+        const isAlpine = fs.existsSync('/etc/alpine-release');
+        if (isAlpine) {
+          throw new AppError(
+            `System Chromium not found at ${chromeExecutablePath}. This is required in Alpine Linux. Check Dockerfile installation.`,
+            500
+          );
+        }
         puppeteerInstance = puppeteer;
-        // CRITICAL: Remove executablePath completely
         if ('executablePath' in launchOptions) {
           delete launchOptions.executablePath;
-        }
-        const skipDownload = process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true';
-        if (skipDownload) {
-          logger.warn('PUPPETEER_SKIP_CHROMIUM_DOWNLOAD is true but system Chrome not found - this may cause issues');
         }
       }
     } else {
