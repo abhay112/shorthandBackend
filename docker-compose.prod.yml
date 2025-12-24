@@ -10,18 +10,18 @@ services:
     env_file:
       - .env
     environment:
-      PORT: 3000
+      PORT: 5001
       NODE_ENV: production
       LOKI_URL: http://loki:3100
       ENABLE_LOKI_LOGS: "true"
     ports:
-      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:5001:5001'
     networks:
       - monitoring
     depends_on:
       - loki
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5001/"]
       interval: 30s
       timeout: 10s
       retries: 3
