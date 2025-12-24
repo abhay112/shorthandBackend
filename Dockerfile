@@ -29,8 +29,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install Chromium and ALL required dependencies for Puppeteer 24.x
-# This is critical - missing libs cause "Target closed" errors
+# Install Chromium and dependencies for Puppeteer
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -40,59 +39,15 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont \
     font-noto-emoji \
-    # Additional required libraries for Chromium stability
-    libstdc++ \
-    dbus \
-    dbus-libs \
-    mesa-gl \
-    mesa-dri-gallium \
-    # Font rendering
-    fontconfig \
-    ttf-liberation \
-    # Additional utilities
-    udev \
-    # Timezone data (sometimes needed)
-    tzdata \
-    && rm -rf /var/cache/apk/* \
-    # Clean up
-    && rm -rf /tmp/*
+    && rm -rf /var/cache/apk/*
 
 # Create symlink for chromium-browser (Alpine uses chromium, but Puppeteer expects chromium-browser)
-# Remove existing symlink if it exists to avoid symlink loops
-RUN rm -f /usr/bin/chromium-browser && \
-    if [ -f /usr/bin/chromium ]; then \
-        ln -sf /usr/bin/chromium /usr/bin/chromium-browser && \
-        echo "Chromium symlink created successfully"; \
-    else \
-        echo "WARNING: Chromium not found at /usr/bin/chromium"; \
-        exit 1; \
-    fi
+RUN ln -s /usr/bin/chromium /usr/bin/chromium-browser || true
 
-# Verify the symlink was created correctly and ensure it's accessible
-# Make sure both the symlink target and symlink itself are executable by all users
-RUN if [ -L /usr/bin/chromium-browser ] || [ -f /usr/bin/chromium-browser ]; then \
-        echo "✓ Chromium-browser symlink verified"; \
-        # Ensure the actual Chromium binary is executable
-        chmod +x /usr/bin/chromium 2>/dev/null || true; \
-        # Ensure the symlink is accessible (symlinks inherit permissions from target)
-        chmod +x /usr/bin/chromium-browser 2>/dev/null || true; \
-        # Test that it's accessible (run as a test user to verify permissions)
-        echo "Testing Chromium accessibility..." && \
-        /usr/bin/chromium-browser --version 2>&1 | head -1 || echo "Note: Version check completed"; \
-        echo "✓ Chromium is accessible and executable"; \
-    else \
-        echo "⚠ ERROR: chromium-browser symlink not found - this will cause PDF generation to fail!"; \
-        exit 1; \
-    fi
-
-# Set Chromium path for our code to detect (code will validate and fallback if not found)
-# DO NOT set PUPPETEER_EXECUTABLE_PATH - let our code control it via launchOptions.executablePath
-# This allows proper fallback to bundled Chromium if system Chrome is not available
+# Set Chromium path for Puppeteer
 ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
-# Set Puppeteer cache directory (for bundled Chromium)
-ENV PUPPETEER_CACHE_DIR=/home/nodejs/.cache/puppeteer
-# Mark as Docker container for our detection logic
-ENV DOCKER_CONTAINER=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -105,19 +60,12 @@ COPY --chown=nodejs:nodejs . .
 # Create logs directory with proper permissions
 RUN mkdir -p /app/logs && chown -R nodejs:nodejs /app/logs
 
-# Create cache and temp directories for Puppeteer with proper permissions
+# Create cache directory for Puppeteer with proper permissions
 RUN mkdir -p /home/nodejs/.cache/puppeteer && \
-    mkdir -p /tmp/.chromium && \
-    chown -R nodejs:nodejs /home/nodejs/.cache && \
-    chown -R nodejs:nodejs /tmp/.chromium
+    chown -R nodejs:nodejs /home/nodejs/.cache
 
-# Switch to non-root user for Puppeteer installation
+# Switch to non-root user
 USER nodejs
-
-# Note: Puppeteer's bundled Chrome is compiled for glibc and won't work in Alpine (musl)
-# We rely on system Chromium which is already installed above
-# Skip Puppeteer Chromium download to save build time and space
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Expose port
 EXPOSE 5001
@@ -128,4 +76,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Start application
 CMD ["node", "src/app.js"]
-
