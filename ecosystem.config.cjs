@@ -1,4 +1,4 @@
-export default {
+module.exports = {
   apps: [{
     name: 'shorthand-backend',
     script: 'src/app.js',
@@ -20,4 +20,3 @@ export default {
     ignore_watch: ['node_modules', 'logs', '.git']
   }]
 };
-

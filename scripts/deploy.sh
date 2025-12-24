@@ -584,7 +584,7 @@ deploy_backend_pm2() {
     
     # Start backend with PM2
     log_info "Starting backend with PM2..."
-    pm2 start ecosystem.config.js || error_exit "Failed to start backend with PM2"
+    pm2 start ecosystem.config.cjs || error_exit "Failed to start backend with PM2"
     
     # Save PM2 process list
     pm2 save || log_warning "Failed to save PM2 process list"
