@@ -29,6 +29,26 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Install Chromium and dependencies for Puppeteer
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    font-noto-emoji \
+    && rm -rf /var/cache/apk/*
+
+# Create symlink for chromium-browser (Alpine uses chromium, but Puppeteer expects chromium-browser)
+RUN ln -s /usr/bin/chromium /usr/bin/chromium-browser || true
+
+# Set Chromium path for Puppeteer
+ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nodejs
@@ -39,6 +59,10 @@ COPY --chown=nodejs:nodejs . .
 
 # Create logs directory with proper permissions
 RUN mkdir -p /app/logs && chown -R nodejs:nodejs /app/logs
+
+# Create cache directory for Puppeteer with proper permissions
+RUN mkdir -p /home/nodejs/.cache/puppeteer && \
+    chown -R nodejs:nodejs /home/nodejs/.cache
 
 # Switch to non-root user
 USER nodejs

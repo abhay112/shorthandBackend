@@ -24,11 +24,12 @@ function getChromeExecutablePath() {
     return process.env.CHROME_EXECUTABLE_PATH;
   }
 
-  // For production/Docker, try common paths
+  // For production/Docker, try common paths (Alpine Linux first for Docker)
   const commonPaths = [
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser', // Alpine Linux (Docker)
+    '/usr/bin/chromium', // Alpine Linux alternative
+    '/usr/bin/google-chrome-stable', // Debian/Ubuntu
+    '/usr/bin/chromium-browser', // Debian/Ubuntu alternative
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', // Windows 32-bit
@@ -139,13 +140,17 @@ export const generatePdf = asyncHandler(async (req, res) => {
         '--disable-gpu',
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process',
+        '--single-process', // Required for running in Docker
       ],
       timeout: 30000, // 30 seconds timeout for browser launch
     };
 
-    // Only set executablePath if we found one, otherwise let Puppeteer use bundled Chromium
+    // Always set executablePath if we found one (required for Docker/Alpine)
     if (chromeExecutablePath) {
       launchOptions.executablePath = chromeExecutablePath;
+      logger.info('Using Chromium from system path', { path: chromeExecutablePath });
+    } else {
+      logger.warn('Chromium executable not found, Puppeteer will try to use bundled version');
     }
 
     logger.info('Launching browser for PDF generation', {
