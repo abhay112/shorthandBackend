@@ -157,6 +157,7 @@ install_base_utilities() {
         "gnupg"
         "lsb-release"
         "jq"
+        "lsof"
     )
     
     for pkg in "${packages[@]}"; do
@@ -359,30 +360,142 @@ EOF
     log_success "Project files verified"
 }
 
+# Check if port is in use
+is_port_in_use() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1
+    elif command -v ss >/dev/null 2>&1; then
+        ss -lnt | grep -q ":$port "
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -lnt | grep -q ":$port "
+    else
+        # Fallback: try to bind to the port
+        timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null
+    fi
+}
+
+# Get process ID using port
+get_port_pid() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti :$port 2>/dev/null || echo ""
+    elif command -v ss >/dev/null 2>&1; then
+        ss -lntp | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1 || echo ""
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -lntp 2>/dev/null | grep ":$port " | grep -oP '\d+/\w+' | cut -d'/' -f1 | head -1 || echo ""
+    else
+        echo ""
+    fi
+}
+
+# Check and free up ports
+check_and_free_ports() {
+    log_step "Step 9: Checking and Freeing Ports"
+    
+    local ports=("$BACKEND_PORT" "$GRAFANA_PORT" "$PROMETHEUS_PORT" "$LOKI_PORT")
+    local port_names=("Backend" "Grafana" "Prometheus" "Loki")
+    
+    # First, try to stop existing docker-compose services
+    cd "$PROJECT_ROOT" || error_exit "Failed to change to project directory"
+    
+    log_info "Stopping existing Docker containers..."
+    # Try docker compose (v2) first, then docker-compose (v1)
+    if docker compose version >/dev/null 2>&1; then
+        docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+    else
+        docker-compose -f docker-compose.prod.yml down 2>/dev/null || true
+    fi
+    
+    # Also remove containers by name
+    log_info "Removing existing containers..."
+    docker rm -f shorthnd-backend shorthnd-prometheus shorthnd-loki shorthnd-grafana 2>/dev/null || true
+    
+    # Wait a moment for ports to be released
+    sleep 3
+    
+    # Check each port
+    for i in "${!ports[@]}"; do
+        local port="${ports[$i]}"
+        local name="${port_names[$i]}"
+        
+        # Check if port is in use
+        if is_port_in_use "$port"; then
+            log_warning "Port $port ($name) is in use"
+            
+            # Try to find and kill the process
+            local pid=$(get_port_pid "$port")
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                log_info "Found process $pid using port $port"
+                
+                # Check if it's a docker container
+                local container_id=$(docker ps --format "{{.ID}}" --filter "publish=$port" 2>/dev/null | head -1)
+                if [ -n "$container_id" ]; then
+                    log_info "Stopping Docker container $container_id using port $port..."
+                    docker stop "$container_id" 2>/dev/null || true
+                    docker rm -f "$container_id" 2>/dev/null || true
+                else
+                    log_info "Killing process $pid using port $port..."
+                    kill -9 $pid 2>/dev/null || true
+                fi
+                
+                sleep 2
+                
+                # Verify port is free
+                if is_port_in_use "$port"; then
+                    log_error "Port $port is still in use after attempting to free it"
+                    log_error "Please manually stop the process using: sudo lsof -i :$port"
+                    error_exit "Port $port conflict could not be resolved"
+                else
+                    log_success "Port $port freed successfully"
+                fi
+            else
+                log_warning "Could not identify process using port $port"
+                log_warning "Port may be in use by system. Please check manually: sudo lsof -i :$port"
+            fi
+        else
+            log_success "Port $port ($name) is available"
+        fi
+    done
+    
+    log_success "Ports checked and freed"
+}
+
+# Get docker compose command (v2 or v1)
+get_docker_compose_cmd() {
+    if docker compose version >/dev/null 2>&1; then
+        echo "docker compose"
+    else
+        echo "docker-compose"
+    fi
+}
+
 # Deploy monitoring stack
 deploy_monitoring_stack() {
-    log_step "Step 9: Deploying Monitoring Stack"
+    log_step "Step 10: Deploying Monitoring Stack"
     
     cd "$PROJECT_ROOT" || error_exit "Failed to change to project directory"
     
+    local compose_cmd=$(get_docker_compose_cmd)
+    
     # Check if services are already running
     local services_running=false
-    if docker-compose -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
+    if $compose_cmd -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
         services_running=true
         log_info "Existing services detected. Performing update..."
     fi
     
     # Pull latest images
     log_info "Pulling latest Docker images..."
-    docker-compose -f docker-compose.prod.yml pull || log_warning "Some images failed to pull (may use cached versions)"
+    $compose_cmd -f docker-compose.prod.yml pull || log_warning "Some images failed to pull (may use cached versions)"
     
     # Start services
     if [ "$services_running" = true ]; then
         log_info "Updating services..."
-        docker-compose -f docker-compose.prod.yml up -d
+        $compose_cmd -f docker-compose.prod.yml up -d
     else
         log_info "Starting services for the first time..."
-        docker-compose -f docker-compose.prod.yml up -d
+        $compose_cmd -f docker-compose.prod.yml up -d
     fi
     
     # Wait for all services to be healthy
@@ -573,7 +686,7 @@ setup_ssl_certificate() {
 
 # Setup Nginx configurations
 setup_nginx_configs() {
-    log_step "Step 10: Setting Up Nginx Configurations"
+    log_step "Step 11: Setting Up Nginx Configurations"
     
     # Create configurations
     log_info "Creating Nginx configurations..."
@@ -600,7 +713,7 @@ setup_nginx_configs() {
 
 # Setup SSL certificates (optional)
 setup_ssl_certificates() {
-    log_step "Step 11: Setting Up SSL Certificates"
+    log_step "Step 12: Setting Up SSL Certificates"
     
     log_warning "SSL certificate setup requires:"
     log_warning "  1. DNS records pointing to this server"
@@ -634,7 +747,7 @@ setup_ssl_certificates() {
 
 # Verify deployment
 verify_deployment() {
-    log_step "Step 12: Verifying Deployment"
+    log_step "Step 13: Verifying Deployment"
     
     local all_healthy=true
     
@@ -656,11 +769,12 @@ verify_deployment() {
     
     # Check Docker containers
     log_info "Checking Docker containers..."
-    if docker-compose -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
+    local compose_cmd=$(get_docker_compose_cmd)
+    if $compose_cmd -f docker-compose.prod.yml ps 2>/dev/null | grep -q "Up"; then
         log_success "All Docker containers are running"
     else
         log_warning "Some Docker containers may not be running"
-        docker-compose -f docker-compose.prod.yml ps
+        $compose_cmd -f docker-compose.prod.yml ps
     fi
     
     if [ "$all_healthy" = true ]; then
@@ -703,11 +817,12 @@ print_summary() {
     echo "  - Loki:         http://$LOKI_DOMAIN (or https:// if SSL configured)"
     echo ""
     
+    local compose_cmd=$(get_docker_compose_cmd)
     echo "Useful commands:"
-    echo "  - View logs:        docker-compose -f docker-compose.prod.yml logs -f"
-    echo "  - Restart services: docker-compose -f docker-compose.prod.yml restart"
-    echo "  - Stop services:    docker-compose -f docker-compose.prod.yml down"
-    echo "  - View status:      docker-compose -f docker-compose.prod.yml ps"
+    echo "  - View logs:        $compose_cmd -f docker-compose.prod.yml logs -f"
+    echo "  - Restart services:  $compose_cmd -f docker-compose.prod.yml restart"
+    echo "  - Stop services:     $compose_cmd -f docker-compose.prod.yml down"
+    echo "  - View status:       $compose_cmd -f docker-compose.prod.yml ps"
     echo ""
 }
 
@@ -734,6 +849,7 @@ main() {
     install_nginx
     install_certbot
     verify_project_files
+    check_and_free_ports
     deploy_monitoring_stack
     setup_nginx_configs
     setup_ssl_certificates
