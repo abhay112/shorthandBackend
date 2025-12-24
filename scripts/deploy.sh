@@ -485,10 +485,10 @@ deploy_monitoring_stack() {
         log_info "Existing services detected. Performing update..."
     fi
     
-    # Ensure PORT is set correctly in .env file (docker-compose will override, but good to have it correct)
+    # Ensure PORT and CORS settings are set correctly in .env file
     if [ -f "$PROJECT_ROOT/.env" ]; then
+        # Update PORT if needed
         if grep -q "^PORT=" "$PROJECT_ROOT/.env"; then
-            # Update PORT if it's not 5001
             if ! grep -q "^PORT=5001" "$PROJECT_ROOT/.env"; then
                 log_info "Updating PORT in .env file to 5001..."
                 sed -i 's/^PORT=.*/PORT=5001/' "$PROJECT_ROOT/.env"
@@ -496,6 +496,17 @@ deploy_monitoring_stack() {
         else
             log_info "Adding PORT=5001 to .env file..."
             echo "PORT=5001" >> "$PROJECT_ROOT/.env"
+        fi
+        
+        # Ensure ALLOWED_ORIGINS includes both www and non-www versions
+        if ! grep -q "^ALLOWED_ORIGINS=" "$PROJECT_ROOT/.env"; then
+            log_info "Adding ALLOWED_ORIGINS to .env file..."
+            echo "ALLOWED_ORIGINS=https://vikalpshorthand.com,https://www.vikalpshorthand.com" >> "$PROJECT_ROOT/.env"
+        elif ! grep -q "www.vikalpshorthand.com" "$PROJECT_ROOT/.env"; then
+            log_info "Updating ALLOWED_ORIGINS to include www subdomain..."
+            if grep -q "^ALLOWED_ORIGINS=https://vikalpshorthand.com" "$PROJECT_ROOT/.env"; then
+                sed -i 's|^ALLOWED_ORIGINS=https://vikalpshorthand.com|ALLOWED_ORIGINS=https://vikalpshorthand.com,https://www.vikalpshorthand.com|' "$PROJECT_ROOT/.env"
+            fi
         fi
     fi
     

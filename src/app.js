@@ -61,6 +61,11 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
+    // Parse ALLOWED_ORIGINS from environment (comma-separated)
+    const allowedOriginsFromEnv = process.env.ALLOWED_ORIGINS 
+      ? process.env.ALLOWED_ORIGINS.split(',').map(url => url.trim())
+      : [];
+    
     // List of allowed origins
     const allowedOrigins = [
       'http://localhost:5001',
@@ -69,12 +74,14 @@ app.use(cors({
       'http://localhost:5174',
       'http://localhost:5714',
       'http://192.168.0.115:5714',
-      process.env.FRONTEND_URL
+      process.env.FRONTEND_URL,
+      ...allowedOriginsFromEnv
     ].filter(Boolean); // Remove undefined values
     
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
       callback(null, true);
     } else {
+      logger.warn(`CORS blocked origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
