@@ -17,24 +17,41 @@ const templatePath = path.join(__dirname, '..', 'views', 'template.html');
 
 /**
  * Check if a file exists and is executable
+ * Handles both regular files and symlinks
  */
 function isExecutable(filePath) {
   try {
     if (!fs.existsSync(filePath)) {
       return false;
     }
-    // Check if it's a file (not a directory)
-    const stats = fs.statSync(filePath);
+    // Use lstat to detect symlinks, then stat to check the actual file
+    const lstats = fs.lstatSync(filePath);
+    let stats = lstats;
+    
+    // If it's a symlink, resolve it and check the target
+    if (lstats.isSymbolicLink()) {
+      try {
+        const realPath = fs.realpathSync(filePath);
+        stats = fs.statSync(realPath);
+      } catch {
+        // If symlink is broken, return false
+        return false;
+      }
+    }
+    
+    // Must be a file (not a directory)
     if (!stats.isFile()) {
       return false;
     }
+    
     // On Unix-like systems, check if executable
     // On Windows, if file exists, assume it's executable
     if (process.platform === 'win32') {
       return true;
     }
-    // Check read permission (basic check)
-    fs.accessSync(filePath, fs.constants.R_OK);
+    
+    // Check read and execute permissions
+    fs.accessSync(filePath, fs.constants.R_OK | fs.constants.X_OK);
     return true;
   } catch {
     return false;
@@ -136,9 +153,22 @@ function getChromeExecutablePath() {
   // Check if any common path exists and is executable
   for (const chromePath of commonPaths) {
     // Double-check: path must exist AND be executable
-    if (fs.existsSync(chromePath) && isExecutable(chromePath)) {
-      logger.info('Auto-detected Chrome/Chromium', { path: chromePath, isDocker, isProduction });
-      return chromePath;
+    if (fs.existsSync(chromePath)) {
+      try {
+        if (isExecutable(chromePath)) {
+          logger.info('Auto-detected Chrome/Chromium', { 
+            path: chromePath, 
+            isDocker, 
+            isProduction,
+            isSymlink: fs.lstatSync(chromePath).isSymbolicLink()
+          });
+          return chromePath;
+        } else {
+          logger.debug('Chrome path exists but not executable', { path: chromePath });
+        }
+      } catch (error) {
+        logger.debug('Error checking Chrome path', { path: chromePath, error: error.message });
+      }
     }
   }
 

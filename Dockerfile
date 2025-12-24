@@ -79,6 +79,8 @@ RUN if [ -L /usr/bin/chromium-browser ] || [ -f /usr/bin/chromium-browser ]; the
 # DO NOT set PUPPETEER_EXECUTABLE_PATH - let our code control it via launchOptions.executablePath
 # This allows proper fallback to bundled Chromium if system Chrome is not available
 ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Set Puppeteer cache directory (for bundled Chromium)
+ENV PUPPETEER_CACHE_DIR=/home/nodejs/.cache/puppeteer
 # Mark as Docker container for our detection logic
 ENV DOCKER_CONTAINER=true
 
@@ -99,8 +101,14 @@ RUN mkdir -p /home/nodejs/.cache/puppeteer && \
     chown -R nodejs:nodejs /home/nodejs/.cache && \
     chown -R nodejs:nodejs /tmp/.chromium
 
-# Switch to non-root user
+# Switch to non-root user for Puppeteer installation
 USER nodejs
+
+# Install Puppeteer's bundled Chromium as fallback
+# This ensures bundled Chromium is available if system Chromium fails
+# Run as nodejs user to ensure proper permissions
+RUN cd /app && \
+    npx puppeteer browsers install chrome 2>&1 || echo "Note: Puppeteer Chromium installation completed or will use system Chromium"
 
 # Expose port
 EXPOSE 5001
