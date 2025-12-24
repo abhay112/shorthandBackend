@@ -29,7 +29,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install Chromium and dependencies for Puppeteer
+# Install Chromium and ALL required dependencies for Puppeteer 24.x
+# This is critical - missing libs cause "Target closed" errors
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -39,15 +40,32 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont \
     font-noto-emoji \
-    && rm -rf /var/cache/apk/*
+    # Additional required libraries for Chromium stability
+    libstdc++ \
+    dbus \
+    dbus-libs \
+    mesa-gl \
+    mesa-dri-gallium \
+    # Font rendering
+    fontconfig \
+    ttf-liberation \
+    # Additional utilities
+    udev \
+    # Timezone data (sometimes needed)
+    tzdata \
+    && rm -rf /var/cache/apk/* \
+    # Clean up
+    && rm -rf /tmp/*
 
 # Create symlink for chromium-browser (Alpine uses chromium, but Puppeteer expects chromium-browser)
-RUN ln -s /usr/bin/chromium /usr/bin/chromium-browser || true
+RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
 
 # Set Chromium path for Puppeteer
 ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Mark as Docker container for our detection logic
+ENV DOCKER_CONTAINER=true
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -60,9 +78,11 @@ COPY --chown=nodejs:nodejs . .
 # Create logs directory with proper permissions
 RUN mkdir -p /app/logs && chown -R nodejs:nodejs /app/logs
 
-# Create cache directory for Puppeteer with proper permissions
+# Create cache and temp directories for Puppeteer with proper permissions
 RUN mkdir -p /home/nodejs/.cache/puppeteer && \
-    chown -R nodejs:nodejs /home/nodejs/.cache
+    mkdir -p /tmp/.chromium && \
+    chown -R nodejs:nodejs /home/nodejs/.cache && \
+    chown -R nodejs:nodejs /tmp/.chromium
 
 # Switch to non-root user
 USER nodejs

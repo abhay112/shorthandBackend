@@ -24,12 +24,22 @@ services:
       NODE_ENV: production
       LOKI_URL: http://loki:3100
       ENABLE_LOKI_LOGS: "true"
+      DOCKER_CONTAINER: "true"
     ports:
       - '5001:5001'
     depends_on:
       - loki
     networks:
       - monitoring
+    # Critical: Chrome/Puppeteer requires at least 1GB shared memory
+    # Default Docker shm is 64MB which causes "Target closed" errors
+    shm_size: '2gb'
+    # Security context for Chrome
+    security_opt:
+      - seccomp:unconfined
+    # Cap add for Chrome sandboxing
+    cap_add:
+      - SYS_ADMIN
 
   prometheus:
     image: prom/prometheus:latest

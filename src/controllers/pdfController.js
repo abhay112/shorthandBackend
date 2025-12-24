@@ -1,5 +1,6 @@
 // controllers/pdfController.js
 import puppeteer from 'puppeteer';
+import puppeteerCore from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
 import handlebars from 'handlebars';
@@ -19,9 +20,16 @@ const templatePath = path.join(__dirname, '..', 'views', 'template.html');
  * Auto-detects Chrome installation or uses bundled Chromium
  */
 function getChromeExecutablePath() {
-  // Allow override via environment variable
+  // Allow override via environment variable - BUT VALIDATE IT EXISTS
   if (process.env.CHROME_EXECUTABLE_PATH) {
-    return process.env.CHROME_EXECUTABLE_PATH;
+    const envPath = process.env.CHROME_EXECUTABLE_PATH;
+    if (fs.existsSync(envPath)) {
+      return envPath;
+    }
+    // Env var set but path doesn't exist - log warning and continue to auto-detect
+    logger.warn('CHROME_EXECUTABLE_PATH set but path does not exist, auto-detecting...', { 
+      configuredPath: envPath 
+    });
   }
 
   // For production/Docker, try common paths (Alpine Linux first for Docker)
@@ -38,11 +46,13 @@ function getChromeExecutablePath() {
   // Check if any common path exists
   for (const chromePath of commonPaths) {
     if (fs.existsSync(chromePath)) {
+      logger.info('Auto-detected Chrome at', { path: chromePath });
       return chromePath;
     }
   }
 
   // Return undefined to let Puppeteer use bundled Chromium
+  logger.info('No system Chrome found, will use bundled Puppeteer Chromium');
   return undefined;
 }
 
@@ -128,38 +138,147 @@ export const generatePdf = asyncHandler(async (req, res) => {
   let page = null;
 
   try {
+    // Detect if running in Docker
+    const isDocker = fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+    
     // Launch browser with proper configuration
     const chromeExecutablePath = getChromeExecutablePath();
+    
+    // Determine if we should use system Chrome or bundled Puppeteer
+    const useSystemChrome = !!chromeExecutablePath;
+    
+    // Core args required for both environments (Puppeteer 24.x compatible)
+    const coreArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', // Critical: use /tmp instead of /dev/shm
+      '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--no-zygote', // Critical for Docker stability
+    ];
+    
+    // Additional args for Docker/production environment
+    const dockerArgs = isDocker ? [
+      '--single-process', // Critical: prevents "Target closed" errors in Docker
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-component-extensions-with-background-pages',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--disable-translate',
+      '--disable-features=TranslateUI,BlinkGenPropertyTrees,IsolateOrigins,site-per-process',
+      '--enable-features=NetworkService,NetworkServiceInProcess',
+      '--force-color-profile=srgb',
+      '--metrics-recording-only',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--password-store=basic',
+      '--use-mock-keychain',
+      '--disable-web-security',
+      '--font-render-hinting=none',
+    ] : [];
+    
     const launchOptions = {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--single-process', // Required for running in Docker
-      ],
-      timeout: 30000, // 30 seconds timeout for browser launch
+      // Puppeteer 24.x: Use 'new' headless mode for better compatibility
+      headless: 'new',
+      args: [...coreArgs, ...dockerArgs],
+      timeout: isDocker ? 120000 : 60000,
+      protocolTimeout: isDocker ? 180000 : 120000,
+      // Critical: Use WebSocket instead of pipe for Docker stability
+      pipe: false,
+      // Dump IO for debugging if needed
+      dumpio: process.env.PUPPETEER_DEBUG === 'true',
     };
 
-    // Always set executablePath if we found one (required for Docker/Alpine)
-    if (chromeExecutablePath) {
+    // Use puppeteer-core with system Chrome in Docker, regular puppeteer locally
+    let puppeteerInstance;
+    if (useSystemChrome) {
       launchOptions.executablePath = chromeExecutablePath;
-      logger.info('Using Chromium from system path', { path: chromeExecutablePath });
+      puppeteerInstance = puppeteerCore;
+      logger.info('Using puppeteer-core with system Chromium', { path: chromeExecutablePath });
     } else {
-      logger.warn('Chromium executable not found, Puppeteer will try to use bundled version');
+      puppeteerInstance = puppeteer;
+      logger.info('Using bundled Puppeteer Chromium');
     }
 
     logger.info('Launching browser for PDF generation', {
       executablePath: chromeExecutablePath || 'bundled Chromium',
       userId: req.user?.id,
+      isDocker,
+      useSystemChrome,
+      headless: launchOptions.headless,
+      argsCount: launchOptions.args.length,
     });
 
-    browser = await puppeteer.launch(launchOptions);
-    page = await browser.newPage();
+    // Launch browser with retry logic
+    const maxRetries = isDocker ? 3 : 2;
+    let retries = maxRetries;
+    let lastError = null;
+    
+    while (retries > 0) {
+      try {
+        browser = await puppeteerInstance.launch(launchOptions);
+        logger.info('Browser launched successfully');
+        
+        // Create page with error handling
+        page = await browser.newPage();
+        
+        // Set default timeout for page operations
+        page.setDefaultTimeout(60000);
+        page.setDefaultNavigationTimeout(60000);
+        
+        // Handle page crashes gracefully
+        page.on('error', (err) => {
+          logger.error('Page crashed', { error: err.message });
+        });
+        
+        // Verify page is responsive
+        await page.evaluate(() => true);
+        
+        logger.info('Browser and page ready for PDF generation');
+        break; // Success, exit retry loop
+      } catch (error) {
+        lastError = error;
+        retries--;
+        logger.warn(`Browser launch attempt failed, retries left: ${retries}`, { 
+          error: error.message,
+          stack: error.stack?.split('\n').slice(0, 3).join('\n')
+        });
+        
+        // Cleanup failed browser instance
+        if (browser) {
+          try {
+            await browser.close().catch(() => {});
+          } catch {
+            // Force kill if close fails
+            try {
+              browser.process()?.kill('SIGKILL');
+            } catch {
+              // Ignore kill errors
+            }
+          }
+          browser = null;
+          page = null;
+        }
+        
+        if (retries === 0) {
+          throw new Error(`Failed to launch browser after ${maxRetries} attempt(s): ${lastError.message}`);
+        }
+        
+        // Wait before retry with exponential backoff
+        const waitTime = (maxRetries - retries) * 1000;
+        await new Promise(resolve => global.setTimeout(resolve, waitTime));
+      }
+    }
 
     // Compile template with HTML content
     const finalHtml = compileTemplate({ html });
@@ -168,29 +287,65 @@ export const generatePdf = asyncHandler(async (req, res) => {
     await page.setViewport({ width: 1200, height: 800, deviceScaleFactor: 2 });
 
     // Set content with timeout and error handling
-    await page.setContent(finalHtml, {
-      waitUntil: 'networkidle0',
-      timeout: 30000,
-    });
+    // Use 'load' instead of 'networkidle0' for more reliability in Docker
+    try {
+      await page.setContent(finalHtml, {
+        waitUntil: 'load',
+        timeout: 30000,
+      });
+      
+      // Wait a bit for any dynamic content to render
+      await new Promise(resolve => global.setTimeout(resolve, 1000));
+    } catch (contentError) {
+      logger.warn('Error setting page content, retrying with simpler wait condition', { 
+        error: contentError.message 
+      });
+      // Retry with simpler wait condition
+      await page.setContent(finalHtml, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+      await new Promise(resolve => global.setTimeout(resolve, 1000));
+    }
 
     // Emulate screen media type for better rendering
     await page.emulateMediaType('screen');
 
-    // Generate PDF
+    // Generate PDF with error handling
     logger.info('Generating PDF', { userId: req.user?.id, filename: pdfFilename });
 
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '20px',
-        right: '20px',
-        bottom: '20px',
-        left: '20px',
-      },
-      preferCSSPageSize: false,
-      displayHeaderFooter: false,
-    });
+    let pdfBuffer;
+    try {
+      pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '20px',
+          right: '20px',
+          bottom: '20px',
+          left: '20px',
+        },
+        preferCSSPageSize: false,
+        displayHeaderFooter: false,
+        timeout: 30000,
+      });
+    } catch (pdfError) {
+      // If PDF generation fails, try with simpler options
+      logger.warn('PDF generation failed with standard options, retrying with simplified options', {
+        error: pdfError.message
+      });
+      pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '10mm',
+          right: '10mm',
+          bottom: '10mm',
+          left: '10mm',
+        },
+        timeout: 30000,
+      });
+    }
 
     // Close browser immediately to free resources
     await browser.close();
