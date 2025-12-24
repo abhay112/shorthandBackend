@@ -13,6 +13,9 @@ import userBatchRoutes from './userBatchRoutes.js';
 
 const router = express.Router();
 
+router.use('/pdf', pdfRouter);
+
+
 // Authentication routes (no auth required)
 router.use('/auth', authRoutes);
 

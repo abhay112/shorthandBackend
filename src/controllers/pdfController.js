@@ -4,6 +4,9 @@ import fs from 'fs';
 import path from 'path';
 import handlebars from 'handlebars';
 import { fileURLToPath } from 'url';
+import { asyncHandler } from '../utils/asyncHandler.js';
+import { AppError } from '../utils/AppError.js';
+import logger from '../utils/logger.js';
 
 // ✅ Fix __dirname (not available in ES modules)
 const __filename = fileURLToPath(import.meta.url);
@@ -11,145 +14,236 @@ const __dirname = path.dirname(__filename);
 
 const templatePath = path.join(__dirname, '..', 'views', 'template.html');
 
-function compileTemplate(data) {
-  const templateContent = fs.readFileSync(templatePath, 'utf-8');
-  const template = handlebars.compile(templateContent);
-  return template(data);
-}
-
-const generatePdf = async (req, res) => {
-  const { html, filename } = req.body;
-
-  if (!html) {
-    return res.status(400).json({ error: 'HTML content is required' });
+/**
+ * Get Chrome/Chromium executable path based on OS
+ * Auto-detects Chrome installation or uses bundled Chromium
+ */
+function getChromeExecutablePath() {
+  // Allow override via environment variable
+  if (process.env.CHROME_EXECUTABLE_PATH) {
+    return process.env.CHROME_EXECUTABLE_PATH;
   }
 
-  let browser;
-  let page;
+  // For production/Docker, try common paths
+  const commonPaths = [
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', // Windows 32-bit
+  ];
+
+  // Check if any common path exists
+  for (const chromePath of commonPaths) {
+    if (fs.existsSync(chromePath)) {
+      return chromePath;
+    }
+  }
+
+  // Return undefined to let Puppeteer use bundled Chromium
+  return undefined;
+}
+
+/**
+ * Compile Handlebars template with error handling
+ */
+function compileTemplate(data) {
   try {
-    browser = await puppeteer.launch({
-      executablePath: '/usr/bin/google-chrome-stable', // adjust if needed
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    if (!fs.existsSync(templatePath)) {
+      throw new AppError('PDF template file not found', 500);
+    }
+
+    const templateContent = fs.readFileSync(templatePath, 'utf-8');
+    const template = handlebars.compile(templateContent);
+    return template(data);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(`Failed to compile PDF template: ${error.message}`, 500);
+  }
+}
+
+/**
+ * Validate PDF buffer by checking magic bytes
+ */
+function validatePdfBuffer(buffer) {
+  if (!buffer || buffer.length === 0) {
+    throw new AppError('Generated PDF buffer is empty', 500);
+  }
+
+  // Ensure buffer is a Buffer
+  const pdfBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+
+  // Check PDF magic bytes (first 4 bytes should be '%PDF')
+  const magicBytes = pdfBuffer.slice(0, 4).toString('ascii');
+  const isValidPdf = magicBytes === '%PDF';
+
+  if (!isValidPdf) {
+    // Check if buffer contains error message
+    const bufferAsString = pdfBuffer.toString('utf-8', 0, Math.min(500, pdfBuffer.length));
+    if (bufferAsString.includes('error') || bufferAsString.includes('Error') || bufferAsString.includes('Exception')) {
+      throw new AppError(`PDF generation error: ${bufferAsString.substring(0, 200)}`, 500);
+    }
+    throw new AppError(`Generated file is not a valid PDF. Magic bytes: ${magicBytes}`, 500);
+  }
+
+  return pdfBuffer;
+}
+
+/**
+ * Sanitize filename to prevent path traversal and invalid characters
+ */
+function sanitizeFilename(filename) {
+  if (!filename || typeof filename !== 'string') {
+    return 'document';
+  }
+
+  // Remove path separators and dangerous characters
+  return filename
+    .replace(/[/\\?%*:|"<>]/g, '_')
+    .replace(/\s+/g, '_')
+    .substring(0, 100) // Limit length
+    .trim();
+}
+
+/**
+ * Generate PDF from HTML content
+ * POST /api/v1/admin/pdf
+ * Body: { html: string, filename?: string, studentName?: string }
+ */
+export const generatePdf = asyncHandler(async (req, res) => {
+  const { html, filename, studentName } = req.body;
+
+  // Input validation
+  if (!html || typeof html !== 'string' || html.trim().length === 0) {
+    throw new AppError('HTML content is required and must be a non-empty string', 400);
+  }
+
+  // Determine filename - prioritize filename, fallback to studentName, then default
+  const baseFilename = sanitizeFilename(filename || studentName || 'document');
+  const pdfFilename = baseFilename.endsWith('.pdf') ? baseFilename : `${baseFilename}.pdf`;
+
+  let browser = null;
+  let page = null;
+
+  try {
+    // Launch browser with proper configuration
+    const chromeExecutablePath = getChromeExecutablePath();
+    const launchOptions = {
       headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ],
+      timeout: 30000, // 30 seconds timeout for browser launch
+    };
+
+    // Only set executablePath if we found one, otherwise let Puppeteer use bundled Chromium
+    if (chromeExecutablePath) {
+      launchOptions.executablePath = chromeExecutablePath;
+    }
+
+    logger.info('Launching browser for PDF generation', {
+      executablePath: chromeExecutablePath || 'bundled Chromium',
+      userId: req.user?.id,
     });
 
+    browser = await puppeteer.launch(launchOptions);
     page = await browser.newPage();
+
+    // Compile template with HTML content
     const finalHtml = compileTemplate({ html });
 
     // Set viewport for consistent rendering
-    await page.setViewport({ width: 1200, height: 800 });
-    
-    try {
-      await page.setContent(finalHtml, { 
-        waitUntil: 'networkidle0',
-        timeout: 30000 
-      });
-    } catch (contentError) {
-      throw new Error(`Failed to set page content: ${contentError.message}`);
-    }
-    
-    await page.emulateMediaType('screen');
+    await page.setViewport({ width: 1200, height: 800, deviceScaleFactor: 2 });
 
-    // Generate PDF with additional options
-    let pdfBuffer;
-    try {
-      pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: {
-          top: '20px',
-          right: '20px',
-          bottom: '20px',
-          left: '20px'
-        },
-        preferCSSPageSize: false
-      });
-    } catch (pdfError) {
-      throw new Error(`Failed to generate PDF: ${pdfError.message}`);
-    }
-
-    // Close browser before sending response to free resources
-    await browser.close();
-    browser = null;
-
-    // Validate PDF buffer
-    if (!pdfBuffer || pdfBuffer.length === 0) {
-      throw new Error('Generated PDF buffer is empty');
-    }
-
-    // Ensure pdfBuffer is a Buffer
-    const buffer = Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer);
-    
-    // Log buffer info for debugging
-    console.log('PDF Buffer Info:', {
-      type: typeof pdfBuffer,
-      isBuffer: Buffer.isBuffer(pdfBuffer),
-      length: buffer.length,
-      firstBytesHex: buffer.slice(0, 8).toString('hex'),
-      firstBytesAscii: buffer.slice(0, 8).toString('ascii')
+    // Set content with timeout and error handling
+    await page.setContent(finalHtml, {
+      waitUntil: 'networkidle0',
+      timeout: 30000,
     });
 
-    // Verify it's a valid PDF by checking magic bytes (first 4 bytes should be '%PDF')
-    // Try multiple encodings in case of encoding issues
-    const checks = [
-      buffer.slice(0, 4).toString('ascii'),
-      buffer.slice(0, 4).toString('latin1'),
-      buffer.slice(0, 4).toString('utf8')
-    ];
-    
-    const isValidPdf = checks.some(check => check === '%PDF');
-    
-    if (!isValidPdf) {
-      // Log detailed info for debugging
-      console.error('PDF validation failed. Details:', {
-        bufferType: typeof pdfBuffer,
-        isBuffer: Buffer.isBuffer(pdfBuffer),
-        bufferLength: buffer.length,
-        first20BytesHex: buffer.slice(0, 20).toString('hex'),
-        first20BytesAscii: buffer.slice(0, 20).toString('ascii'),
-        checks: checks
-      });
-      
-      // If it's not a PDF, it might be an error message from puppeteer
-      const bufferAsString = buffer.toString('utf-8', 0, Math.min(500, buffer.length));
-      if (bufferAsString.includes('error') || bufferAsString.includes('Error') || bufferAsString.includes('Exception')) {
-        throw new Error(`PDF generation error: ${bufferAsString.substring(0, 500)}`);
-      }
-      
-      // If buffer has reasonable size, it might still be valid - log warning but proceed
-      if (buffer.length > 100) {
-        console.warn('PDF validation failed but buffer has content. Proceeding with caution. First bytes:', checks[0]);
-        // Don't throw - let it through and see if client can handle it
-      } else {
-        throw new Error(`Generated file is not a valid PDF. Buffer too small (${buffer.length} bytes). First bytes: ${checks[0]}`);
-      }
-    }
+    // Emulate screen media type for better rendering
+    await page.emulateMediaType('screen');
 
-    // Set headers before sending - ensure PDF is treated as binary
-    const pdfFilename = filename && filename.endsWith('.pdf') 
-      ? filename 
-      : `${filename || 'document'}.pdf`;
+    // Generate PDF
+    logger.info('Generating PDF', { userId: req.user?.id, filename: pdfFilename });
 
-    // Set all headers at once to ensure proper content type
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: {
+        top: '20px',
+        right: '20px',
+        bottom: '20px',
+        left: '20px',
+      },
+      preferCSSPageSize: false,
+      displayHeaderFooter: false,
+    });
+
+    // Close browser immediately to free resources
+    await browser.close();
+    browser = null;
+    page = null;
+
+    // Validate PDF buffer
+    const validatedBuffer = validatePdfBuffer(pdfBuffer);
+
+    logger.info('PDF generated successfully', {
+      userId: req.user?.id,
+      filename: pdfFilename,
+      size: validatedBuffer.length,
+    });
+
+    // Set response headers
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${pdfFilename}"`,
-      'Content-Length': buffer.length,
-      'Cache-Control': 'no-cache',
+      'Content-Length': validatedBuffer.length.toString(),
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Encoding': 'identity' // Ensure no compression
+      'Content-Encoding': 'identity', // Ensure no compression
     });
-    
-    // Send PDF buffer - Express will handle Buffer correctly
-    res.send(buffer);
-  } catch (err) {
+
+    // Send PDF buffer
+    res.send(validatedBuffer);
+  } catch (error) {
+    // Ensure browser is closed even on error
     if (browser) {
-      await browser.close().catch(() => {});
+      try {
+        await browser.close();
+      } catch (closeError) {
+        logger.error('Error closing browser', { error: closeError.message });
+      }
     }
-    res
-      .status(500)
-      .json({ error: 'PDF generation failed', details: err.message });
+
+    // Log error with context
+    logger.error('PDF generation failed', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      filename: pdfFilename,
+    });
+
+    // Re-throw AppError as-is, wrap others
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap unexpected errors
+    throw new AppError(
+      `PDF generation failed: ${error.message || 'Unknown error'}`,
+      500
+    );
   }
-};
+});
 
 export default { generatePdf };
