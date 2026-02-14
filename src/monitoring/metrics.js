@@ -4,13 +4,12 @@ const register = new client.Registry();
 
 register.setDefaultLabels({
   app: 'shorthand-backend',
-  env: process.env.NODE_ENV || 'development'
+  env: process.env.NODE_ENV || 'production'
 });
 
 client.collectDefaultMetrics({
   register,
 });
-
 
 const httpRequestDurationSeconds = new client.Histogram({
   name: 'http_request_duration_seconds',
@@ -30,9 +29,8 @@ register.registerMetric(httpRequestCounter);
 
 export const metricsMiddleware = (req, res, next) => {
   const end = httpRequestDurationSeconds.startTimer();
-  const startTime = Date.now();
 
-  res.on('finish', async () => {
+  res.on('finish', () => {
     const route = resolveRoute(req);
     const labels = {
       method: req.method,
@@ -42,35 +40,6 @@ export const metricsMiddleware = (req, res, next) => {
 
     httpRequestCounter.labels(labels).inc();
     end(labels);
-
-    // Log errors with context for Loki (4xx and 5xx)
-    if (res.statusCode >= 400) {
-      const { default: logger } = await import('../utils/logger.js');
-      const errorLog = {
-        type: 'http_error',
-        statusCode: res.statusCode,
-        method: req.method,
-        route: route,
-        url: req.originalUrl,
-        query: Object.keys(req.query).length > 0 ? req.query : undefined,
-        params: Object.keys(req.params).length > 0 ? req.params : undefined,
-        body: req.body && Object.keys(req.body).length > 0 ? req.body : undefined,
-        responseTime: Date.now() - startTime,
-        user: {
-          id: req.user?.id,
-          role: req.user?.role,
-        },
-        requestId: req.id,
-        timestamp: new Date().toISOString(),
-      };
-
-
-      if (res.statusCode >= 500) {
-        logger.error(JSON.stringify(errorLog), { ...errorLog });
-      } else {
-        logger.warn(JSON.stringify(errorLog), { ...errorLog });
-      }
-    }
   });
 
   next();
@@ -99,4 +68,5 @@ function resolveRoute(req) {
 
   return 'unknown_route';
 }
+
 
