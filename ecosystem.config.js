@@ -8,8 +8,9 @@ export default {
       NODE_ENV: 'production',
       PORT: 5001
     },
-    error_file: './logs/pm2-error.log',
-    out_file: './logs/pm2-out.log',
+    error_file: '/opt/apps/shorthand-backend/logs/pm2-error.log',
+    out_file: '/opt/apps/shorthand-backend/logs/pm2-out.log',
+
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     merge_logs: true,
     autorestart: true,

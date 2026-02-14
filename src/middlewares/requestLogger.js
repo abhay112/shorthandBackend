@@ -1,25 +1,28 @@
-import morgan from 'morgan';
 import logger from '../utils/logger.js';
 
-// Create a custom token for user ID
-morgan.token('userId', (req) => {
-  return req.user ? req.user.id : 'anonymous';
-});
+/**
 
-morgan.token('userRole', (req) => {
-  return req.user ? req.user.role : 'guest';
-});
+ * Middleware to log HTTP requests in a structured format
+ */
+const requestLogger = (req, res, next) => {
+  const start = Date.now();
 
-// Define custom format
-const customFormat = ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent" - User: :userId Role: :userRole';
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const { method, originalUrl } = req;
+    const { statusCode } = res;
 
-// Create morgan middleware
-const requestLogger = morgan(customFormat, {
-  stream: {
-    write: (message) => {
-      logger.http(message.trim());
-    }
-  }
-});
+    logger.info(`${method} ${originalUrl} ${statusCode} ${duration}ms`, {
+      method,
+      url: originalUrl,
+      statusCode,
+      duration,
+      requestId: req.id,
+      user: req.user ? { id: req.user.id, role: req.user.role } : undefined
+    });
+  });
+
+  next();
+};
 
 export default requestLogger;

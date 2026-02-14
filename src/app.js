@@ -12,17 +12,21 @@ import { handleError } from './middlewares/errorHandler.js';
 import logger from './utils/logger.js';
 import { specs, swaggerUi } from './config/swagger.js';
 import dotenv from 'dotenv';
-dotenv.config(); 
+dotenv.config();
 
-import { dbConnection, PORT } from './config/index.js'; 
+import { dbConnection, PORT } from './config/index.js';
 import {
   getMetrics,
   getMetricsContentType,
   metricsMiddleware,
 } from './monitoring/metrics.js';
 import healthRoutes from './routes/healthRoutes.js';
+import requestIdMiddleware from './middlewares/requestId.js';
 
 const app = express();
+
+app.use(requestIdMiddleware);
+
 
 // Trust proxy for accurate IP addresses
 app.set('trust proxy', 1);
@@ -60,12 +64,12 @@ app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     // Parse ALLOWED_ORIGINS from environment (comma-separated)
-    const allowedOriginsFromEnv = process.env.ALLOWED_ORIGINS 
+    const allowedOriginsFromEnv = process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(',').map(url => url.trim())
       : [];
-    
+
     // List of allowed origins
     const allowedOrigins = [
       'http://localhost:5001',
@@ -77,7 +81,7 @@ app.use(cors({
       process.env.FRONTEND_URL,
       ...allowedOriginsFromEnv
     ].filter(Boolean); // Remove undefined values
-    
+
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
       callback(null, true);
     } else {

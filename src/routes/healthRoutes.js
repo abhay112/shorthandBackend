@@ -10,13 +10,12 @@ const router = express.Router();
  */
 router.get('/health', (_req, res) => {
   res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
+    status: 'ok',
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development',
     version: '1.0.0'
   });
 });
+
 
 /**
  * Readiness probe

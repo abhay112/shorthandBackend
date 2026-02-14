@@ -2,9 +2,15 @@ import client from 'prom-client';
 
 const register = new client.Registry();
 
+register.setDefaultLabels({
+  app: 'shorthand-backend',
+  env: process.env.NODE_ENV || 'development'
+});
+
 client.collectDefaultMetrics({
   register,
 });
+
 
 const httpRequestDurationSeconds = new client.Histogram({
   name: 'http_request_duration_seconds',
@@ -54,9 +60,11 @@ export const metricsMiddleware = (req, res, next) => {
           id: req.user?.id,
           role: req.user?.role,
         },
+        requestId: req.id,
         timestamp: new Date().toISOString(),
       };
-      
+
+
       if (res.statusCode >= 500) {
         logger.error(JSON.stringify(errorLog), { ...errorLog });
       } else {
