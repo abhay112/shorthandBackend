@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 
 const appName = 'shorthand-backend';
-const logDir = '/opt/apps/shorthand-backend/logs';
+let logDir = '/opt/apps/shorthand-backend/logs';
 
 // Ensure logs directory exists (if permissions allow)
 try {
@@ -12,6 +12,10 @@ try {
   }
 } catch (error) {
   console.warn(`Could not create log directory ${logDir}, falling back to local logs directory`);
+  logDir = path.resolve('logs');
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
 }
 
 const { combine, timestamp, json, errors } = winston.format;
