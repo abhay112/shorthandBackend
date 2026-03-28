@@ -21,7 +21,23 @@ import {
 import { authenticateFirebase } from '../middlewares/firebaseAuth.js';
 import { requireAdmin } from '../middlewares/authMiddleware.js';
 
-const upload = multer({ dest: 'uploads/audios/' });
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    if (file.fieldname === 'audioFile') {
+      cb(null, 'uploads/audios/');
+    } else if (file.fieldname === 'testImage') {
+      cb(null, 'uploads/images/');
+    } else {
+      cb(null, 'uploads/others/');
+    }
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + '-' + file.originalname);
+  }
+});
+
+const upload = multer({ storage: storage });
 const router = express.Router();
 
 // All test routes require authentication and admin role
@@ -32,8 +48,14 @@ router.use(requireAdmin);
 router.get('/', getAllTests);
 router.get('/:id', getTestById);
 // Handle both multipart/form-data (for file uploads) and application/json
-router.post('/', upload.single('audioFile'), createTest);
-router.put('/:id', upload.single('audioFile'), updateTest);
+router.post('/', upload.fields([
+  { name: 'audioFile', maxCount: 1 },
+  { name: 'testImage', maxCount: 1 }
+]), createTest);
+router.put('/:id', upload.fields([
+  { name: 'audioFile', maxCount: 1 },
+  { name: 'testImage', maxCount: 1 }
+]), updateTest);
 router.delete('/:id', deleteTest);
 
 // Batch assignment operations
