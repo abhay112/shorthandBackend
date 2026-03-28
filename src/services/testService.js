@@ -21,7 +21,8 @@ const testService = {
       availableUntil,
       settings = {},
       statistics = {},
-      isPublished = false
+      isPublished = false,
+      testImageUrl
     } = options;
 
     const now = new Date();
@@ -43,6 +44,7 @@ const testService = {
       isPublished: isPublished,
       publishedAt: isPublished ? now : null,
       audioURL,
+      testImageUrl,
       referenceText
     };
 
@@ -72,12 +74,12 @@ const testService = {
     const assignments = await BatchTestAssignment.find({ testId: test._id, status: 'active' })
       .populate('batchId', 'name description')
       .lean();
-    
+
     test.assignedBatches = assignments.map(a => a.batchId).filter(Boolean);
 
     return test;
   },
-  
+
   attachTextToTest: async (testId, referenceText) => {
     const test = await Test.findById(testId);
     if (!test) {
@@ -99,40 +101,40 @@ const testService = {
 
     return test;
   },
-  
+
   getAllTests: async (options = {}) => {
     const { page, limit, testType, difficulty, category, isActive } = options;
-    
+
     // Build filter object
     const filter = {};
     if (testType) filter.testType = testType;
     if (difficulty) filter.difficulty = difficulty;
     if (category) filter.category = category;
     if (isActive !== undefined) filter.isActive = isActive;
-    
+
     // If pagination is requested
     if (page && limit) {
       const skip = (page - 1) * limit;
       const totalItems = await Test.countDocuments(filter);
       const totalPages = Math.ceil(totalItems / limit);
-      
+
       const tests = await Test.find(filter)
         .populate('uploadedBy', 'name email')
         .populate('currentContent', 'version status publishedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
-      
+
       // Fetch batch assignments separately for each test using BatchTestAssignment join table
       const testIds = tests.map(t => t._id.toString());
-      const assignments = await BatchTestAssignment.find({ 
-        testId: { $in: testIds }, 
+      const assignments = await BatchTestAssignment.find({
+        testId: { $in: testIds },
         status: 'active',
         isActive: true
       })
         .populate('batchId', 'name description')
         .lean();
-      
+
       // Group assignments by testId
       const assignmentsByTest = {};
       assignments.forEach(assignment => {
@@ -146,22 +148,22 @@ const testService = {
           assignmentsByTest[testIdStr].push(assignment.batchId);
         }
       });
-      
+
       // Convert tests to plain objects and attach batch assignments
       const testsWithBatches = tests.map(test => {
         const testObj = test.toObject ? test.toObject() : test;
         const testIdStr = testObj._id.toString();
-        
+
         // Get batch assignments for this test - return batch IDs to match expected format
         const batchAssignments = assignmentsByTest[testIdStr] || [];
         testObj.assignedBatches = batchAssignments.map(batch => {
           // Return just the batch ID string
           return (batch._id || batch).toString();
         });
-        
+
         return testObj;
       });
-      
+
       return {
         tests: testsWithBatches,
         pagination: {
@@ -172,23 +174,23 @@ const testService = {
         },
       };
     }
-    
+
     // Return all tests without pagination (for backward compatibility)
     const tests = await Test.find(filter)
       .populate('uploadedBy', 'name email')
       .populate('currentContent', 'version status publishedAt')
       .sort({ createdAt: -1 });
-    
+
     // Fetch batch assignments separately using BatchTestAssignment join table
     const testIds = tests.map(t => t._id.toString());
-    const assignments = await BatchTestAssignment.find({ 
-      testId: { $in: testIds }, 
+    const assignments = await BatchTestAssignment.find({
+      testId: { $in: testIds },
       status: 'active',
       isActive: true
     })
       .populate('batchId', 'name description')
       .lean();
-    
+
     // Group assignments by testId
     const assignmentsByTest = {};
     assignments.forEach(assignment => {
@@ -202,44 +204,44 @@ const testService = {
         assignmentsByTest[testIdStr].push(assignment.batchId);
       }
     });
-    
+
     // Convert tests to plain objects and attach batch assignments
     const testsWithBatches = tests.map(test => {
       const testObj = test.toObject ? test.toObject() : test;
       const testIdStr = testObj._id.toString();
-      
+
       // Get batch assignments for this test - return batch IDs to match expected format
       const batchAssignments = assignmentsByTest[testIdStr] || [];
       testObj.assignedBatches = batchAssignments.map(batch => {
         // Return just the batch ID string
         return (batch._id || batch).toString();
       });
-      
+
       return testObj;
     });
 
     return { tests: testsWithBatches, pagination: null };
   },
-  
+
   getTestById: async (id) => {
     const test = await Test.findById(id)
       .populate('uploadedBy', 'name email')
       .populate('currentContent', 'version status referenceText audio publishedAt')
       .populate('draftContent', 'version status referenceText audio updatedAt');
-    
+
     if (!test) {
       throw new AppError('Test not found', 404);
     }
-    
+
     // Fetch batch assignments using BatchTestAssignment join table
-    const assignments = await BatchTestAssignment.find({ 
-      testId: id, 
+    const assignments = await BatchTestAssignment.find({
+      testId: id,
       status: 'active',
       isActive: true
     })
       .populate('batchId', 'name description')
       .lean();
-    
+
     // Get unique batch IDs
     const uniqueBatchIds = [];
     const seenBatchIds = new Set();
@@ -250,14 +252,14 @@ const testService = {
         uniqueBatchIds.push(batchId);
       }
     });
-    
+
     // Convert test to plain object and attach assignedBatches
     const testObj = test.toObject ? test.toObject() : test;
     testObj.assignedBatches = uniqueBatchIds;
-    
+
     return testObj;
   },
-  
+
   updateTest: async (id, updateData = {}, options = {}) => {
     const adminId = options.adminId;
 
@@ -285,6 +287,11 @@ const testService = {
     assignIfDefined('availableUntil', (value) => value);
     assignIfDefined('isActive');
     assignIfDefined('allowViewWhenBlocked');
+    assignIfDefined('testImageUrl');
+
+    if (updateData.removeImage) {
+      test.testImageUrl = null;
+    }
 
     // Settings merge
     if (updateData.settings && typeof updateData.settings === 'object') {
@@ -429,7 +436,7 @@ const testService = {
     const assignments = await BatchTestAssignment.find({ testId: test._id, status: 'active' })
       .populate('batchId', 'name description')
       .lean();
-    
+
     test.assignedBatches = assignments.map(a => a.batchId).filter(Boolean);
 
     return test;
@@ -446,7 +453,7 @@ const testService = {
     const test = await Test.findById(testId)
       .populate('currentContent')
       .populate('draftContent');
-    
+
     if (!test) {
       throw new AppError('Test not found', 404);
     }
@@ -524,7 +531,7 @@ const testService = {
     const assignments = await BatchTestAssignment.find({ testId: test._id, status: 'active' })
       .populate('batchId', 'name description')
       .lean();
-    
+
     const testObj = test.toObject ? test.toObject() : test;
     testObj.assignedBatches = assignments.map(a => a.batchId).filter(Boolean);
 
@@ -533,77 +540,77 @@ const testService = {
       action: targetState ? 'published' : 'unpublished'
     };
   },
-  
+
   deleteTest: async (id) => {
     const test = await Test.findById(id);
     if (!test) {
       throw new AppError('Test not found', 404);
     }
-    
+
     // Remove test from all batches
     await Batch.updateMany(
       { tests: id },
       { $pull: { tests: id } }
     );
-    
+
     return await Test.findByIdAndDelete(id);
   },
-  
+
   assignTestToBatches: async (testId, batchIds) => {
     const test = await Test.findById(testId);
     if (!test) {
       throw new AppError('Test not found', 404);
     }
-    
+
     // Verify all batches exist
     const batches = await Batch.find({ _id: { $in: batchIds } });
     if (batches.length !== batchIds.length) {
       throw new AppError('Some batches not found', 400);
     }
-    
+
     // Add test to batches
     await Batch.updateMany(
       { _id: { $in: batchIds } },
       { $addToSet: { tests: testId } }
     );
-    
+
     // Add batches to test
     await Test.findByIdAndUpdate(
       testId,
       { $addToSet: { assignedBatches: { $each: batchIds } } },
       { new: true }
     );
-    
+
     return await testService.getTestById(testId);
   },
-  
+
   removeTestFromBatches: async (testId, batchIds) => {
     const test = await Test.findById(testId);
     if (!test) {
       throw new AppError('Test not found', 404);
     }
-    
+
     // Remove test from batches
     await Batch.updateMany(
       { _id: { $in: batchIds } },
       { $pull: { tests: testId } }
     );
-    
+
     // Remove batches from test
     await Test.findByIdAndUpdate(
       testId,
       { $pull: { assignedBatches: { $in: batchIds } } },
       { new: true }
     );
-    
+
     return await testService.getTestById(testId);
   },
-  
+
   getTestsForBatch: async (batchId) => {
     const tests = await Test.find({ assignedBatches: batchId })
       .populate('uploadedBy', 'name email')
       .sort({ createdAt: -1 });
-    
+
     return tests;
   },
 
@@ -663,7 +670,7 @@ const testService = {
   getTestsForDate: async (date, batchId) => {
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
-    
+
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
@@ -722,7 +729,7 @@ const testService = {
       if (!assignment.batchId || !assignment.assignedDate) {
         throw new AppError('Each assignment must have batchId and assignedDate', 400);
       }
-      
+
       // Add metadata
       assignment.assignedBy = adminId;
       assignment.assignedAt = new Date();
@@ -774,13 +781,13 @@ const testService = {
     }
 
     // Get all students in the batch using StudentBatch join table
-    const studentBatches = await StudentBatch.find({ 
-      batchId, 
-      status: 'active' 
+    const studentBatches = await StudentBatch.find({
+      batchId,
+      status: 'active'
     })
       .populate('studentId', '_id name email')
       .lean();
-    
+
     const studentsInBatch = studentBatches.map(sb => sb.studentId).filter(Boolean);
     const studentIds = studentsInBatch.map(s => s._id || s);
 
@@ -799,7 +806,7 @@ const testService = {
       const studentId = r.studentId?._id || r.studentId;
       return studentId.toString();
     }))];
-    
+
     // Get unique students who completed
     const completedStudentIds = [...new Set(completedResults.map(r => {
       const studentId = r.studentId?._id || r.studentId;

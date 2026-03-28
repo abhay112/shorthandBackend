@@ -6,52 +6,41 @@ import { validateObjectId } from '../utils/validation.js';
 
 
 export const createTest = asyncHandler(async (req, res) => {
-  const { 
-    title, 
-    referenceText, 
+  let body = req.body;
+  if (req.body.data) {
+    try {
+      body = JSON.parse(req.body.data);
+    } catch (e) {
+      throw new AppError('Invalid data JSON format', 400);
+    }
+  }
+
+  const {
+    title,
+    referenceText,
     description,
     testType,
     difficulty,
     category,
-    duration, 
+    duration,
     maxRetakes,
     availableFrom,
     availableUntil,
     assignedDays,
     assignedBatches
-  } = req.body;
-  
-  const audioURL = req.file?.path || null;
+  } = body;
+
+  // Handle multiple files from req.files
+  const audioURL = req.files?.audioFile?.[0]?.path || null;
+  const testImageUrl = req.files?.testImage?.[0]?.path || null;
 
   if (!title || !referenceText) {
     throw new AppError('Title and referenceText are required', 400);
   }
 
-  // Parse JSON strings if provided
-  let parsedAssignedDays = [];
-  let parsedAssignedBatches = [];
-
-  if (assignedDays) {
-    try {
-      parsedAssignedDays = JSON.parse(assignedDays);
-      if (!Array.isArray(parsedAssignedDays)) {
-        throw new AppError('assignedDays must be an array', 400);
-      }
-    } catch {
-      throw new AppError('Invalid assignedDays JSON format', 400);
-    }
-  }
-
-  if (assignedBatches) {
-    try {
-      parsedAssignedBatches = JSON.parse(assignedBatches);
-      if (!Array.isArray(parsedAssignedBatches)) {
-        throw new AppError('assignedBatches must be an array', 400);
-      }
-    } catch {
-      throw new AppError('Invalid assignedBatches JSON format', 400);
-    }
-  }
+  // Parse JSON strings if provided (in case they are not already parsed objects)
+  let parsedAssignedDays = (typeof assignedDays === 'string') ? JSON.parse(assignedDays) : (assignedDays || []);
+  let parsedAssignedBatches = (typeof assignedBatches === 'string') ? JSON.parse(assignedBatches) : (assignedBatches || []);
 
   // Validate and process assigned days
   if (parsedAssignedDays.length > 0) {
@@ -59,7 +48,7 @@ export const createTest = asyncHandler(async (req, res) => {
       if (!dayAssignment.batchId || !dayAssignment.assignedDate) {
         throw new AppError('Each day assignment must have batchId and assignedDate', 400);
       }
-      
+
       // Add metadata
       dayAssignment.assignedBy = req.user.id;
       dayAssignment.assignedAt = new Date();
@@ -83,7 +72,8 @@ export const createTest = asyncHandler(async (req, res) => {
       availableFrom: availableFrom ? new Date(availableFrom) : null,
       availableUntil: availableUntil ? new Date(availableUntil) : null,
       assignedDays: parsedAssignedDays,
-      assignedBatches: parsedAssignedBatches
+      assignedBatches: parsedAssignedBatches,
+      testImageUrl: testImageUrl
     }
   );
 
@@ -99,7 +89,7 @@ export const createTest = asyncHandler(async (req, res) => {
 
 export const getAllTests = asyncHandler(async (req, res) => {
   const { page, limit, testType, difficulty, category, isActive } = req.query;
-  
+
   const options = {
     page: page ? parseInt(page) : undefined,
     limit: limit ? parseInt(limit) : undefined,
@@ -110,7 +100,7 @@ export const getAllTests = asyncHandler(async (req, res) => {
   };
 
   const result = await testService.getAllTests(options);
-  
+
   return sendResponse(
     res,
     200,
@@ -124,9 +114,9 @@ export const getAllTests = asyncHandler(async (req, res) => {
 export const getTestById = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'test ID');
-  
+
   const test = await testService.getTestById(id);
-  
+
   return sendResponse(
     res,
     200,
@@ -140,6 +130,15 @@ export const getTestById = asyncHandler(async (req, res) => {
 export const updateTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'test ID');
+
+  let body = req.body;
+  if (req.body.data) {
+    try {
+      body = JSON.parse(req.body.data);
+    } catch (e) {
+      throw new AppError('Invalid data JSON format', 400);
+    }
+  }
 
   const {
     title,
@@ -161,8 +160,9 @@ export const updateTest = asyncHandler(async (req, res) => {
     isBlocked,
     blockReason,
     publishNow,
-    removeAudio
-  } = req.body;
+    removeAudio,
+    removeImage
+  } = body;
 
   const parseBoolean = (value) => {
     if (value === undefined || value === null) return undefined;
@@ -254,10 +254,10 @@ export const updateTest = asyncHandler(async (req, res) => {
   }
 
   // Collect flattened settings.* fields if provided via multipart forms
-  const flattenedSettings = Object.keys(req.body).reduce((acc, key) => {
+  const flattenedSettings = Object.keys(body).reduce((acc, key) => {
     if (!key.startsWith('settings.')) return acc;
     const settingKey = key.replace('settings.', '');
-    acc[settingKey] = parseBoolean(req.body[key]) ?? req.body[key];
+    acc[settingKey] = parseBoolean(body[key]) ?? body[key];
     return acc;
   }, {});
 
@@ -285,11 +285,16 @@ export const updateTest = asyncHandler(async (req, res) => {
     ...(isBlocked !== undefined && { isBlocked: parseBoolean(isBlocked) }),
     ...(blockReason !== undefined && { blockReason }),
     ...(publishNow !== undefined && { publishNow: parseBoolean(publishNow) }),
-    ...(removeAudio !== undefined && { removeAudio: parseBoolean(removeAudio) })
+    ...(removeAudio !== undefined && { removeAudio: parseBoolean(removeAudio) }),
+    ...(removeImage !== undefined && { removeImage: parseBoolean(removeImage) })
   };
 
-  if (req.file?.path) {
-    updatePayload.audioURL = req.file.path;
+  if (req.files?.audioFile?.[0]?.path) {
+    updatePayload.audioURL = req.files.audioFile[0].path;
+  }
+
+  if (req.files?.testImage?.[0]?.path) {
+    updatePayload.testImageUrl = req.files.testImage[0].path;
   }
 
   const test = await testService.updateTest(id, updatePayload, { adminId: req.user.id });
@@ -307,9 +312,9 @@ export const updateTest = asyncHandler(async (req, res) => {
 export const deleteTest = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateObjectId(id, 'test ID');
-  
+
   await testService.deleteTest(id);
-  
+
   return sendResponse(
     res,
     200,
@@ -527,8 +532,8 @@ export const toggleTestPublication = asyncHandler(async (req, res) => {
 
   const result = await testService.toggleTestPublication(id, req.user.id, publishState);
 
-  const message = result.action === 'published' 
-    ? 'Test published successfully' 
+  const message = result.action === 'published'
+    ? 'Test published successfully'
     : 'Test unpublished successfully';
 
   return sendResponse(
