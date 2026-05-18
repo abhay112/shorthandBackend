@@ -7,6 +7,8 @@ import StudentRanking from '../models/StudentRanking.js';
 import BatchTestAssignment from '../models/BatchTestAssignment.js';
 import StudentBatch from '../models/StudentBatch.js';
 import { AppError } from '../utils/AppError.js';
+import { deleteFromS3 } from './s3Service.js';
+
 
 const testService = {
   createTest: async (title, audioURL, referenceText, adminId, options = {}) => {
@@ -287,9 +289,17 @@ const testService = {
     assignIfDefined('availableUntil', (value) => value);
     assignIfDefined('isActive');
     assignIfDefined('allowViewWhenBlocked');
-    assignIfDefined('testImageUrl');
+    if (updateData.testImageUrl !== undefined) {
+      if (test.testImageUrl && test.testImageUrl !== updateData.testImageUrl) {
+        await deleteFromS3(test.testImageUrl);
+      }
+      test.testImageUrl = updateData.testImageUrl;
+    }
 
     if (updateData.removeImage) {
+      if (test.testImageUrl) {
+        await deleteFromS3(test.testImageUrl);
+      }
       test.testImageUrl = null;
     }
 
@@ -546,6 +556,15 @@ const testService = {
     if (!test) {
       throw new AppError('Test not found', 404);
     }
+
+    // Delete files from S3 if they exist
+    if (test.audioURL) {
+      await deleteFromS3(test.audioURL);
+    }
+    if (test.testImageUrl) {
+      await deleteFromS3(test.testImageUrl);
+    }
+
 
     // Remove test from all batches
     await Batch.updateMany(

@@ -3,6 +3,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 import { validateObjectId } from '../utils/validation.js';
+import { uploadToS3 } from '../services/s3Service.js';
 
 
 export const createTest = asyncHandler(async (req, res) => {
@@ -30,9 +31,16 @@ export const createTest = asyncHandler(async (req, res) => {
     assignedBatches
   } = body;
 
-  // Handle multiple files from req.files
-  const audioURL = req.files?.audioFile?.[0]?.path || null;
-  const testImageUrl = req.files?.testImage?.[0]?.path || null;
+  // Handle multiple files from req.files and upload to S3
+  let audioURL = req.files?.audioFile?.[0]?.path || null;
+  let testImageUrl = req.files?.testImage?.[0]?.path || null;
+
+  if (audioURL) {
+    audioURL = await uploadToS3(audioURL, 'audios');
+  }
+  if (testImageUrl) {
+    testImageUrl = await uploadToS3(testImageUrl, 'images');
+  }
 
   if (!title || !referenceText) {
     throw new AppError('Title and referenceText are required', 400);
@@ -290,11 +298,11 @@ export const updateTest = asyncHandler(async (req, res) => {
   };
 
   if (req.files?.audioFile?.[0]?.path) {
-    updatePayload.audioURL = req.files.audioFile[0].path;
+    updatePayload.audioURL = await uploadToS3(req.files.audioFile[0].path, 'audios');
   }
 
   if (req.files?.testImage?.[0]?.path) {
-    updatePayload.testImageUrl = req.files.testImage[0].path;
+    updatePayload.testImageUrl = await uploadToS3(req.files.testImage[0].path, 'images');
   }
 
   const test = await testService.updateTest(id, updatePayload, { adminId: req.user.id });

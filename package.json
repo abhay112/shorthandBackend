@@ -26,6 +26,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1048.0",
+    "@aws-sdk/s3-request-presigner": "^3.1048.0",
     "@faker-js/faker": "^9.8.0",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
@@ -83,14 +85,14 @@
       "!src/database/**",
       "!src/config/**"
     ],
-          "coverageThreshold": {
-            "global": {
-              "branches": 0,
-              "functions": 0,
-              "lines": 0,
-              "statements": 0
-            }
-          },
+    "coverageThreshold": {
+      "global": {
+        "branches": 0,
+        "functions": 0,
+        "lines": 0,
+        "statements": 0
+      }
+    },
     "coverageDirectory": "coverage",
     "verbose": true,
     "testTimeout": 30000
