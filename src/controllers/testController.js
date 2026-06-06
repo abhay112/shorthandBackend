@@ -3,7 +3,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 import { validateObjectId } from '../utils/validation.js';
-import { uploadToS3 } from '../services/s3Service.js';
+import { uploadToS3, generatePresignedUploadUrl } from '../services/s3Service.js';
 
 
 export const createTest = asyncHandler(async (req, res) => {
@@ -31,15 +31,20 @@ export const createTest = asyncHandler(async (req, res) => {
     assignedBatches
   } = body;
 
-  // Handle multiple files from req.files and upload to S3
+  // Handle multiple files from req.files and upload to S3, or fallback to direct S3 URLs
   let audioURL = req.files?.audioFile?.[0]?.path || null;
   let testImageUrl = req.files?.testImage?.[0]?.path || null;
 
   if (audioURL) {
     audioURL = await uploadToS3(audioURL, 'audios');
+  } else if (body.audioURL) {
+    audioURL = body.audioURL;
   }
+
   if (testImageUrl) {
     testImageUrl = await uploadToS3(testImageUrl, 'images');
+  } else if (body.testImageUrl) {
+    testImageUrl = body.testImageUrl;
   }
 
   if (!title || !referenceText) {
@@ -299,10 +304,14 @@ export const updateTest = asyncHandler(async (req, res) => {
 
   if (req.files?.audioFile?.[0]?.path) {
     updatePayload.audioURL = await uploadToS3(req.files.audioFile[0].path, 'audios');
+  } else if (body.audioURL) {
+    updatePayload.audioURL = body.audioURL;
   }
 
   if (req.files?.testImage?.[0]?.path) {
     updatePayload.testImageUrl = await uploadToS3(req.files.testImage[0].path, 'images');
+  } else if (body.testImageUrl) {
+    updatePayload.testImageUrl = body.testImageUrl;
   }
 
   const test = await testService.updateTest(id, updatePayload, { adminId: req.user.id });
@@ -551,5 +560,24 @@ export const toggleTestPublication = asyncHandler(async (req, res) => {
     message,
     result,
     { adminId: req.user.id, testId: id, action: result.action }
+  );
+});
+
+// Generate S3 presigned upload URL
+export const getPresignedUrl = asyncHandler(async (req, res) => {
+  const { fileName, fileType, folder } = req.query;
+
+  if (!fileName || !fileType) {
+    throw new AppError('fileName and fileType query parameters are required', 400);
+  }
+
+  const { uploadUrl, downloadUrl } = await generatePresignedUploadUrl(fileName, fileType, folder);
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Presigned S3 upload URL generated successfully',
+    { uploadUrl, downloadUrl }
   );
 });

@@ -16,7 +16,8 @@ import {
   closeTestForBatch,
   openTestForBatch,
   generateRankingsForBatchTest,
-  toggleTestPublication
+  toggleTestPublication,
+  getPresignedUrl
 } from '../controllers/testController.js';
 import { authenticateFirebase } from '../middlewares/firebaseAuth.js';
 import { requireAdmin } from '../middlewares/authMiddleware.js';
@@ -46,6 +47,7 @@ router.use(requireAdmin);
 
 // Basic CRUD operations
 router.get('/', getAllTests);
+router.get('/presigned-url', getPresignedUrl);
 router.get('/:id', getTestById);
 // Handle both multipart/form-data (for file uploads) and application/json
 router.post('/', upload.fields([

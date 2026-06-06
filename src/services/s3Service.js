@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
@@ -12,6 +13,32 @@ const s3Client = new S3Client({
 });
 
 const bucketName = process.env.AWS_BUCKET_NAME || 'shorthand-tests';
+
+/**
+ * Generate a presigned S3 upload URL for direct client-side upload
+ * @param {string} fileName - Original filename
+ * @param {string} fileType - MIME type of the file
+ * @param {string} folder - Destination folder on S3 (e.g. 'audios', 'images')
+ * @returns {Promise<{ uploadUrl: string, downloadUrl: string }>}
+ */
+export const generatePresignedUploadUrl = async (fileName, fileType, folder = 'images') => {
+  if (!fileName || !fileType) {
+    throw new Error('File name and file type are required for presigned URL');
+  }
+
+  const uniqueFileName = `${folder}/${Date.now()}-${fileName}`;
+  const uploadParams = {
+    Bucket: bucketName,
+    Key: uniqueFileName,
+    ContentType: fileType,
+  };
+
+  const command = new PutObjectCommand(uploadParams);
+  const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+  const downloadUrl = `https://${bucketName}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${uniqueFileName}`;
+
+  return { uploadUrl, downloadUrl };
+};
 
 /**
  * Upload a file to S3 from a local path
