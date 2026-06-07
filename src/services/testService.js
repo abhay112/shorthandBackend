@@ -24,7 +24,8 @@ const testService = {
       settings = {},
       statistics = {},
       isPublished = false,
-      testImageUrl
+      testImageUrl,
+      testImageUrls = []
     } = options;
 
     const now = new Date();
@@ -47,6 +48,7 @@ const testService = {
       publishedAt: isPublished ? now : null,
       audioURL,
       testImageUrl,
+      testImageUrls,
       referenceText
     };
 
@@ -289,18 +291,36 @@ const testService = {
     assignIfDefined('availableUntil', (value) => value);
     assignIfDefined('isActive');
     assignIfDefined('allowViewWhenBlocked');
-    if (updateData.testImageUrl !== undefined) {
+    if (updateData.testImageUrls !== undefined) {
+      const oldUrls = test.testImageUrls || [];
+      const newUrls = updateData.testImageUrls || [];
+      const urlsToDelete = oldUrls.filter(url => !newUrls.includes(url));
+      for (const url of urlsToDelete) {
+        await deleteFromS3(url);
+      }
+      test.testImageUrls = newUrls;
+      test.testImageUrl = newUrls[0] || null;
+    } else if (updateData.testImageUrl !== undefined) {
       if (test.testImageUrl && test.testImageUrl !== updateData.testImageUrl) {
-        await deleteFromS3(test.testImageUrl);
+        const oldUrls = test.testImageUrls || [];
+        if (!oldUrls.includes(updateData.testImageUrl)) {
+          await deleteFromS3(test.testImageUrl);
+        }
       }
       test.testImageUrl = updateData.testImageUrl;
+      test.testImageUrls = updateData.testImageUrl ? [updateData.testImageUrl] : [];
     }
 
     if (updateData.removeImage) {
-      if (test.testImageUrl) {
-        await deleteFromS3(test.testImageUrl);
+      const urlsToDelete = [...(test.testImageUrls || [])];
+      if (test.testImageUrl && !urlsToDelete.includes(test.testImageUrl)) {
+        urlsToDelete.push(test.testImageUrl);
+      }
+      for (const url of urlsToDelete) {
+        await deleteFromS3(url);
       }
       test.testImageUrl = null;
+      test.testImageUrls = [];
     }
 
     // Settings merge
@@ -561,8 +581,12 @@ const testService = {
     if (test.audioURL) {
       await deleteFromS3(test.audioURL);
     }
-    if (test.testImageUrl) {
-      await deleteFromS3(test.testImageUrl);
+    const imageUrls = [...(test.testImageUrls || [])];
+    if (test.testImageUrl && !imageUrls.includes(test.testImageUrl)) {
+      imageUrls.push(test.testImageUrl);
+    }
+    for (const url of imageUrls) {
+      await deleteFromS3(url);
     }
 
 

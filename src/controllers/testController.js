@@ -33,7 +33,6 @@ export const createTest = asyncHandler(async (req, res) => {
 
   // Handle multiple files from req.files and upload to S3, or fallback to direct S3 URLs
   let audioURL = req.files?.audioFile?.[0]?.path || null;
-  let testImageUrl = req.files?.testImage?.[0]?.path || null;
 
   if (audioURL) {
     audioURL = await uploadToS3(audioURL, 'audios');
@@ -41,11 +40,30 @@ export const createTest = asyncHandler(async (req, res) => {
     audioURL = body.audioURL;
   }
 
-  if (testImageUrl) {
-    testImageUrl = await uploadToS3(testImageUrl, 'images');
-  } else if (body.testImageUrl) {
-    testImageUrl = body.testImageUrl;
+  let testImageUrls = [];
+  if (req.files?.testImage) {
+    for (const file of req.files.testImage) {
+      const url = await uploadToS3(file.path, 'images');
+      if (url) {
+        testImageUrls.push(url);
+      }
+    }
   }
+
+  if (body.testImageUrls) {
+    try {
+      const parsedUrls = typeof body.testImageUrls === 'string' ? JSON.parse(body.testImageUrls) : body.testImageUrls;
+      if (Array.isArray(parsedUrls)) {
+        testImageUrls = [...testImageUrls, ...parsedUrls];
+      }
+    } catch (e) {
+      // ignore parsing error
+    }
+  } else if (body.testImageUrl) {
+    testImageUrls.push(body.testImageUrl);
+  }
+
+  const testImageUrl = testImageUrls[0] || null;
 
   if (!title || !referenceText) {
     throw new AppError('Title and referenceText are required', 400);
@@ -86,7 +104,8 @@ export const createTest = asyncHandler(async (req, res) => {
       availableUntil: availableUntil ? new Date(availableUntil) : null,
       assignedDays: parsedAssignedDays,
       assignedBatches: parsedAssignedBatches,
-      testImageUrl: testImageUrl
+      testImageUrl: testImageUrl,
+      testImageUrls: testImageUrls
     }
   );
 
@@ -308,10 +327,43 @@ export const updateTest = asyncHandler(async (req, res) => {
     updatePayload.audioURL = body.audioURL;
   }
 
-  if (req.files?.testImage?.[0]?.path) {
-    updatePayload.testImageUrl = await uploadToS3(req.files.testImage[0].path, 'images');
-  } else if (body.testImageUrl) {
-    updatePayload.testImageUrl = body.testImageUrl;
+  let testImageUrls = undefined;
+
+  if (body.testImageUrls !== undefined) {
+    try {
+      const parsedUrls = typeof body.testImageUrls === 'string' ? JSON.parse(body.testImageUrls) : body.testImageUrls;
+      if (Array.isArray(parsedUrls)) {
+        testImageUrls = [...parsedUrls];
+      }
+    } catch (e) {
+      // ignore parsing error
+    }
+  }
+
+  if (req.files?.testImage) {
+    if (testImageUrls === undefined) {
+      testImageUrls = [];
+    }
+    for (const file of req.files.testImage) {
+      const url = await uploadToS3(file.path, 'images');
+      if (url) {
+        testImageUrls.push(url);
+      }
+    }
+  }
+
+  if (body.testImageUrl !== undefined) {
+    if (testImageUrls === undefined) {
+      testImageUrls = [];
+    }
+    if (body.testImageUrl && !testImageUrls.includes(body.testImageUrl)) {
+      testImageUrls.unshift(body.testImageUrl);
+    }
+  }
+
+  if (testImageUrls !== undefined) {
+    updatePayload.testImageUrls = testImageUrls;
+    updatePayload.testImageUrl = testImageUrls[0] || null;
   }
 
   const test = await testService.updateTest(id, updatePayload, { adminId: req.user.id });
@@ -565,8 +617,42 @@ export const toggleTestPublication = asyncHandler(async (req, res) => {
 
 // Generate S3 presigned upload URL
 export const getPresignedUrl = asyncHandler(async (req, res) => {
-  const { fileName, fileType, folder } = req.query;
+  const { fileName, fileType, folder, files } = req.query;
 
+  // Support generating multiple URLs
+  if (files) {
+    let parsedFiles;
+    try {
+      parsedFiles = typeof files === 'string' ? JSON.parse(files) : files;
+    } catch (e) {
+      throw new AppError('Invalid files format. Must be a valid JSON array.', 400);
+    }
+
+    if (!Array.isArray(parsedFiles)) {
+      throw new AppError('files query parameter must be a JSON array', 400);
+    }
+
+    const urls = await Promise.all(
+      parsedFiles.map(async (fileObj) => {
+        const { fileName: name, fileType: type, folder: fFolder } = fileObj;
+        if (!name || !type) {
+          throw new AppError('Each file must have fileName and fileType properties', 400);
+        }
+        const { uploadUrl, downloadUrl } = await generatePresignedUploadUrl(name, type, fFolder || folder);
+        return { fileName: name, uploadUrl, downloadUrl };
+      })
+    );
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      'Presigned S3 upload URLs generated successfully',
+      { urls }
+    );
+  }
+
+  // Fallback to single file logic
   if (!fileName || !fileType) {
     throw new AppError('fileName and fileType query parameters are required', 400);
   }

@@ -18,6 +18,10 @@ const testSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  testImageUrls: {
+    type: [String],
+    default: []
+  },
   referenceText: {
     type: String,
     required: false,

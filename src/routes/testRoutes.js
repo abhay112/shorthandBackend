@@ -52,11 +52,11 @@ router.get('/:id', getTestById);
 // Handle both multipart/form-data (for file uploads) and application/json
 router.post('/', upload.fields([
   { name: 'audioFile', maxCount: 1 },
-  { name: 'testImage', maxCount: 1 }
+  { name: 'testImage', maxCount: 10 }
 ]), createTest);
 router.put('/:id', upload.fields([
   { name: 'audioFile', maxCount: 1 },
-  { name: 'testImage', maxCount: 1 }
+  { name: 'testImage', maxCount: 10 }
 ]), updateTest);
 router.delete('/:id', deleteTest);
 
