@@ -28,7 +28,8 @@ export const createTest = asyncHandler(async (req, res) => {
     availableFrom,
     availableUntil,
     assignedDays,
-    assignedBatches
+    assignedBatches,
+    showReferenceText
   } = body;
 
   // Handle multiple files from req.files and upload to S3, or fallback to direct S3 URLs
@@ -105,7 +106,8 @@ export const createTest = asyncHandler(async (req, res) => {
       assignedDays: parsedAssignedDays,
       assignedBatches: parsedAssignedBatches,
       testImageUrl: testImageUrl,
-      testImageUrls: testImageUrls
+      testImageUrls: testImageUrls,
+      showReferenceText: showReferenceText !== undefined ? (String(showReferenceText).toLowerCase() !== 'false') : true
     }
   );
 
@@ -193,7 +195,8 @@ export const updateTest = asyncHandler(async (req, res) => {
     blockReason,
     publishNow,
     removeAudio,
-    removeImage
+    removeImage,
+    showReferenceText
   } = body;
 
   const parseBoolean = (value) => {
@@ -318,7 +321,8 @@ export const updateTest = asyncHandler(async (req, res) => {
     ...(blockReason !== undefined && { blockReason }),
     ...(publishNow !== undefined && { publishNow: parseBoolean(publishNow) }),
     ...(removeAudio !== undefined && { removeAudio: parseBoolean(removeAudio) }),
-    ...(removeImage !== undefined && { removeImage: parseBoolean(removeImage) })
+    ...(removeImage !== undefined && { removeImage: parseBoolean(removeImage) }),
+    ...(showReferenceText !== undefined && { showReferenceText: parseBoolean(showReferenceText) })
   };
 
   if (req.files?.audioFile?.[0]?.path) {

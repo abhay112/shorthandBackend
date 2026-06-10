@@ -27,6 +27,10 @@ const testSchema = new mongoose.Schema({
     required: false,
     default: ''
   },
+  showReferenceText: {
+    type: Boolean,
+    default: true
+  },
 
   // Test metadata
   difficulty: {

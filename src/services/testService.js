@@ -25,7 +25,8 @@ const testService = {
       statistics = {},
       isPublished = false,
       testImageUrl,
-      testImageUrls = []
+      testImageUrls = [],
+      showReferenceText = true
     } = options;
 
     const now = new Date();
@@ -49,7 +50,8 @@ const testService = {
       audioURL,
       testImageUrl,
       testImageUrls,
-      referenceText
+      referenceText,
+      showReferenceText
     };
 
     const test = await Test.create(testData);
@@ -291,6 +293,7 @@ const testService = {
     assignIfDefined('availableUntil', (value) => value);
     assignIfDefined('isActive');
     assignIfDefined('allowViewWhenBlocked');
+    assignIfDefined('showReferenceText');
     if (updateData.testImageUrls !== undefined) {
       const oldUrls = test.testImageUrls || [];
       const newUrls = updateData.testImageUrls || [];
