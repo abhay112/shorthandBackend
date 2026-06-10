@@ -126,7 +126,7 @@ const testService = {
 
       const tests = await Test.find(filter)
         .populate('uploadedBy', 'name email')
-        .populate('currentContent', 'version status publishedAt')
+        .populate('currentContent', 'version status publishedAt referenceText audio')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
@@ -173,10 +173,10 @@ const testService = {
       return {
         tests: testsWithBatches,
         pagination: {
-          currentPage: page,
-          totalPages,
-          totalItems,
-          itemsPerPage: limit,
+          total: totalItems,
+          page,
+          limit,
+          pages: totalPages
         },
       };
     }
@@ -184,7 +184,7 @@ const testService = {
     // Return all tests without pagination (for backward compatibility)
     const tests = await Test.find(filter)
       .populate('uploadedBy', 'name email')
-      .populate('currentContent', 'version status publishedAt')
+      .populate('currentContent', 'version status publishedAt referenceText audio')
       .sort({ createdAt: -1 });
 
     // Fetch batch assignments separately using BatchTestAssignment join table

@@ -26,16 +26,28 @@ export const generatePresignedUploadUrl = async (fileName, fileType, folder = 'i
     throw new Error('File name and file type are required for presigned URL');
   }
 
+  // Force proper audio MIME types for common formats when in audios folder
+  let finalFileType = fileType;
+  const ext = path.extname(fileName).toLowerCase();
+  if (folder === 'audios') {
+    if (ext === '.mp4' || ext === '.m4a') finalFileType = 'audio/mp4';
+    else if (ext === '.ogg') finalFileType = 'audio/ogg';
+    else if (ext === '.webm') finalFileType = 'audio/webm';
+  }
+
   const uniqueFileName = `${folder}/${Date.now()}-${fileName}`;
   const uploadParams = {
     Bucket: bucketName,
     Key: uniqueFileName,
-    ContentType: fileType,
+    ContentType: finalFileType,
   };
 
   const command = new PutObjectCommand(uploadParams);
   const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-  const downloadUrl = `https://${bucketName}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${uniqueFileName}`;
+  
+  // Properly URL-encode the file path (but preserve the '/' separators)
+  const encodedFileName = encodeURIComponent(uniqueFileName).replace(/%2F/g, '/');
+  const downloadUrl = `https://${bucketName}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${encodedFileName}`;
 
   return { uploadUrl, downloadUrl };
 };
@@ -58,6 +70,10 @@ export const uploadToS3 = async (localFilePath, folder) => {
     const ext = path.extname(localFilePath).toLowerCase();
     if (ext === '.mp3') contentType = 'audio/mpeg';
     else if (ext === '.wav') contentType = 'audio/wav';
+    else if (ext === '.mp4') contentType = 'video/mp4';
+    else if (ext === '.m4a') contentType = 'audio/mp4';
+    else if (ext === '.ogg') contentType = 'audio/ogg';
+    else if (ext === '.webm') contentType = 'video/webm';
     else if (ext === '.png') contentType = 'image/png';
     else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
     else if (ext === '.svg') contentType = 'image/svg+xml';
@@ -73,7 +89,8 @@ export const uploadToS3 = async (localFilePath, folder) => {
     await s3Client.send(new PutObjectCommand(uploadParams));
     
     // S3 URL format
-    const s3Url = `https://${bucketName}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${fileName}`;
+    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const s3Url = `https://${bucketName}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${encodedFileName}`;
     logger.warn(`Successfully uploaded to S3: ${s3Url}`);
     
     // Cleanup local file after successful upload
