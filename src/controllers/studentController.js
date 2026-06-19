@@ -137,9 +137,9 @@ export const endTestSession = asyncHandler(async (req, res) => {
   const resultData = req.body.results || req.body;
   
   // Validate required field: typedText (or rawInput for backward compatibility)
-  const typedText = resultData.typedText || resultData.rawInput;
+  const typedText = resultData.typedText !== undefined ? resultData.typedText : resultData.rawInput;
   
-  if (!typedText && typedText !== '') {
+  if (typedText === undefined || typedText === null) {
     throw createError('Missing required field: typedText (or rawInput)', 400);
   }
   
@@ -176,9 +176,9 @@ export const resumeTestSession = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { sessionId } = req.params;
   
-  // This would be implemented in the service layer
-  // For now, just return success
-  return sendResponse(res, 200, true, 'Test session resumed', {}, {
+  const session = await studentService.resumeTestSession(studentId, sessionId);
+  
+  return sendResponse(res, 200, true, 'Test session resumed', { session }, {
     studentId: studentId,
     sessionId: sessionId,
     ip: req.ip

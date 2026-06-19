@@ -825,6 +825,23 @@ const studentService = {
           return { canTake: false, reason: 'Maximum retakes exceeded' };
         }
 
+        // Check if there is already an active session (in_progress or not_started)
+        const existingSession = await TestSession.findOne({
+          studentId,
+          testId,
+          status: { $in: ['not_started', 'in_progress'] }
+        }).sort({ createdAt: -1 });
+
+        if (existingSession) {
+          return {
+            canTake: true,
+            remainingAttempts,
+            attemptNumber: existingSession.currentAttempt,
+            reservationSessionId: existingSession.sessionId,
+            session: existingSession
+          };
+        }
+
         // Use completedAttempts + 1 for attempt number (not totalUsed, which includes reserved attempts)
         const attemptNumber = completedAttempts + 1;
 
@@ -839,7 +856,8 @@ const studentService = {
           canTake: true,
           remainingAttempts: Math.max(0, remainingAttempts - 1),
           attemptNumber,
-          reservationSessionId: reservation.sessionId
+          reservationSessionId: reservation.sessionId,
+          session: reservation
         };
       }
 
@@ -899,6 +917,14 @@ const studentService = {
         throw createError('Maximum retakes exceeded', 403);
       }
 
+      // Get contentDoc to detect if there is audio
+      const contentDoc = test.currentContent
+        ? (test.currentContent.referenceText ? test.currentContent : await TestContent.findById(test.currentContent))
+        : null;
+
+      const audioURL = test.audioURL || contentDoc?.audio?.url || (contentDoc?.audio && typeof contentDoc.audio === 'string' ? contentDoc.audio : null);
+      const hasAudio = !!audioURL;
+
       let session = await TestSession.findOne({
         studentId,
         testId,
@@ -917,13 +943,27 @@ const studentService = {
         session.maxRetakes = test.maxRetakes;
       }
 
+      const typingStarted = session?.sessionData?.typingStarted ?? !hasAudio;
+
       if (session && session.status === 'not_started') {
         session.status = 'in_progress';
         session.timeStarted = new Date();
-        session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        if (hasAudio && !typingStarted) {
+          session.sessionData = { ...session.sessionData, typingStarted: false };
+          session.timeExpires = new Date(Date.now() + (test.duration + 3600) * 1000);
+        } else {
+          session.sessionData = { ...session.sessionData, typingStarted: true, typingStartedAt: new Date() };
+          session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        }
         await session.save();
       } else if (session && session.status === 'in_progress') {
-        session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        if (hasAudio && !typingStarted) {
+          session.sessionData = { ...session.sessionData, typingStarted: false };
+          session.timeExpires = new Date(Date.now() + (test.duration + 3600) * 1000);
+        } else {
+          session.sessionData = { ...session.sessionData, typingStarted: true, typingStartedAt: session.sessionData?.typingStartedAt || new Date() };
+          session.timeExpires = new Date(Date.now() + test.duration * 1000);
+        }
         await session.save();
       } else {
         // Check access based on completed attempts only
@@ -936,6 +976,11 @@ const studentService = {
           throw createError('No batch assignment found for this test', 400);
         }
 
+        const initTypingStarted = !hasAudio;
+        const initialExpires = hasAudio
+          ? new Date(Date.now() + (test.duration + 3600) * 1000)
+          : new Date(Date.now() + test.duration * 1000);
+
         // Use completedAttempts + 1 for attempt number (not totalUsed, which includes reserved attempts)
         session = await TestSession.create({
           studentId,
@@ -947,14 +992,14 @@ const studentService = {
           maxRetakes: test.maxRetakes,
           status: 'in_progress',
           timeStarted: new Date(),
-          timeExpires: new Date(Date.now() + test.duration * 1000)
+          timeExpires: initialExpires,
+          sessionData: {
+            typingStarted: initTypingStarted,
+            ...(initTypingStarted && { typingStartedAt: new Date() })
+          }
         });
 
       }
-
-      const contentDoc = test.currentContent
-        ? (test.currentContent.referenceText ? test.currentContent : await TestContent.findById(test.currentContent))
-        : null;
 
       const content = contentDoc
         ? {
@@ -991,7 +1036,8 @@ const studentService = {
         content,
         attemptNumber: session.currentAttempt || 1,
         remainingAttempts,
-        timeExpires: session.timeExpires
+        timeExpires: session.timeExpires,
+        sessionData: session.sessionData
       };
     } catch (_err) {
       throw _err;
@@ -1068,6 +1114,42 @@ const studentService = {
       return result;
     } catch (_err) {
       throw _err;
+    }
+  },
+
+  resumeTestSession: async (studentId, sessionId) => {
+    try {
+      const session = await TestSession.findOne({
+        studentId,
+        sessionId,
+        status: 'in_progress'
+      });
+
+      if (!session) {
+        throw createError('Active test session not found', 404);
+      }
+
+      const test = await Test.findById(session.testId).lean();
+      if (!test) {
+        throw createError('Test not found', 404);
+      }
+
+      const typingStartedAt = session.sessionData?.typingStartedAt || new Date();
+      session.sessionData = {
+        ...session.sessionData,
+        typingStarted: true,
+        typingStartedAt: typingStartedAt
+      };
+      
+      // Update timeStarted to typing start time
+      session.timeStarted = typingStartedAt;
+      // Reset timeExpires to normal duration
+      session.timeExpires = new Date(typingStartedAt.getTime() + test.duration * 1000);
+
+      await session.save();
+      return session;
+    } catch (error) {
+      throw error;
     }
   },
 
