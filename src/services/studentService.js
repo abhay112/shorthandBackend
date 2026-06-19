@@ -43,6 +43,35 @@ const determineTestBatchId = async (studentBatchIds, testId) => {
 };
 
 const getAttemptUsage = async (studentId, testId) => {
+  // Just-in-time expire any active session that has timed out
+  await TestSession.updateMany(
+    {
+      studentId,
+      testId,
+      status: 'in_progress',
+      timeExpires: { $lt: new Date() }
+    },
+    {
+      $set: { status: 'expired' }
+    }
+  );
+
+  // Self-heal duplicate active sessions: if there are multiple active sessions,
+  // keep the most recent one (not_started or in_progress) and mark the rest as abandoned.
+  const activeSessions = await TestSession.find({
+    studentId,
+    testId,
+    status: { $in: ['not_started', 'in_progress'] }
+  }).sort({ createdAt: -1 });
+
+  if (activeSessions.length > 1) {
+    const duplicateSessionIds = activeSessions.slice(1).map(s => s._id);
+    await TestSession.updateMany(
+      { _id: { $in: duplicateSessionIds } },
+      { $set: { status: 'abandoned' } }
+    );
+  }
+
   const [completedAttempts, reservedAttempts] = await Promise.all([
     Result.countDocuments({ studentId, testId, status: 'completed' }),
     TestSession.countDocuments({
