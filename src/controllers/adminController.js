@@ -5,44 +5,6 @@ import { createError } from '../utils/AppError.js';
 import { sendResponse } from '../utils/sendResponse.js';
 import Student from '../models/Student.js';
 
-export const getAllStudents = asyncHandler(async (req, res) => {
-  const students = await adminService.getAllStudents();
-
-  return sendResponse(res, 200, true, 'All students fetched', { students, count: students.length }, {
-    adminId: req.user.id,
-    studentCount: students.length,
-    ip: req.ip
-  });
-});
-
-export const getStudentById = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  if (!id) throw createError('Student ID is required', 400);
-
-  const student = await adminService.getStudentById(id);
-  if (!student) throw createError('Student not found', 404);
-
-  return sendResponse(res, 200, true, 'Student fetched by ID', { student }, {
-    adminId: req.user.id,
-    studentId: id,
-    ip: req.ip
-  });
-});
-
-export const approveStudent = asyncHandler(async (req, res) => {
-  const { email, status } = req.body;
-  if (!email || status === undefined) throw createError('Email and status are required', 400);
-
-  const result = await adminService.approveStudentService(email, status);
-
-  return sendResponse(res, 200, true, `Student ${status ? 'approved' : 'disapproved'} successfully`, { result }, {
-    adminId: req.user.id,
-    studentEmail: email,
-    status,
-    ip: req.ip
-  });
-});
-
 export const assignBatchToStudent = asyncHandler(async (req, res) => {
   const { studentId, batchId } = req.body;
   if (!studentId || !batchId) throw createError('Student ID and Batch ID are required', 400);
@@ -71,19 +33,6 @@ export const removeBatchFromStudent = asyncHandler(async (req, res) => {
   });
 });
 
-export const blockStudent = asyncHandler(async (req, res) => {
-  const { studentId, block } = req.body;
-  if (!studentId || block === undefined) throw createError('Student ID and block status are required', 400);
-
-  const result = await adminService.setBlockStatus(studentId, block);
-
-  return sendResponse(res, 200, true, `Student ${block ? 'blocked' : 'unblocked'} successfully`, { result }, {
-    adminId: req.user.id,
-    studentId,
-    blockStatus: block,
-    ip: req.ip
-  });
-});
 
 /**
  * Get dashboard statistics

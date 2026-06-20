@@ -11,7 +11,7 @@ export const createTest = asyncHandler(async (req, res) => {
   if (req.body.data) {
     try {
       body = JSON.parse(req.body.data);
-    } catch (e) {
+    } catch {
       throw new AppError('Invalid data JSON format', 400);
     }
   }
@@ -57,7 +57,7 @@ export const createTest = asyncHandler(async (req, res) => {
       if (Array.isArray(parsedUrls)) {
         testImageUrls = [...testImageUrls, ...parsedUrls];
       }
-    } catch (e) {
+    } catch {
       // ignore parsing error
     }
   } else if (body.testImageUrl) {
@@ -169,7 +169,7 @@ export const updateTest = asyncHandler(async (req, res) => {
   if (req.body.data) {
     try {
       body = JSON.parse(req.body.data);
-    } catch (e) {
+    } catch {
       throw new AppError('Invalid data JSON format', 400);
     }
   }
@@ -339,7 +339,7 @@ export const updateTest = asyncHandler(async (req, res) => {
       if (Array.isArray(parsedUrls)) {
         testImageUrls = [...parsedUrls];
       }
-    } catch (e) {
+    } catch {
       // ignore parsing error
     }
   }
@@ -628,7 +628,7 @@ export const getPresignedUrl = asyncHandler(async (req, res) => {
     let parsedFiles;
     try {
       parsedFiles = typeof files === 'string' ? JSON.parse(files) : files;
-    } catch (e) {
+    } catch {
       throw new AppError('Invalid files format. Must be a valid JSON array.', 400);
     }
 

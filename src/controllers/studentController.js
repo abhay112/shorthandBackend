@@ -529,17 +529,6 @@ export const getStudentProgress = asyncHandler(async (req, res) => {
 });
 
 
-export const getAssignedBatches = asyncHandler(async (req, res) => {
-  const studentId = req.user.id;
-  
-  const batches = await studentService.getAssignedBatchesWithDetails(studentId);
-  
-  return sendResponse(res, 200, true, 'Assigned batches retrieved successfully', { batches }, {
-    studentId,
-    ip: req.ip
-  });
-});
-
 export const getPerformanceRankings = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   
