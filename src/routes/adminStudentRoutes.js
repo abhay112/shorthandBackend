@@ -24,6 +24,7 @@ import {
   getStudentSettings,
   updateStudentSettings,
   exportStudentActivityLog,
+  resetStudentPassword,
 } from '../controllers/adminStudentController.js';
 
 const router = express.Router();
@@ -77,5 +78,6 @@ router.get('/:id', getStudent);
 router.patch('/:id/approve', approveStudent);
 router.patch('/:id/block', blockStudent);
 router.patch('/:id/unblock', unblockStudent);
+router.post('/:id/reset-password', resetStudentPassword);
 
 export default router;

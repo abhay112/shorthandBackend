@@ -473,3 +473,33 @@ export const exportStudentActivityLog = asyncHandler(async (req, res) => {
   );
 });
 
+export const resetStudentPassword = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { password } = req.body;
+  
+  validateObjectId(id, 'student ID');
+  
+  if (!password) {
+    throw createError('Password is required', 400);
+  }
+  
+  if (password.length < 6) {
+    throw createError('Password must be at least 6 characters long', 400);
+  }
+  
+  await adminStudentService.resetPassword(id, password);
+  
+  logger.info('Student password reset by admin', {
+    adminId: req.user?.id,
+    studentId: id,
+  });
+  
+  return sendResponse(
+    res,
+    200,
+    true,
+    'Student password reset successfully',
+    null,
+    { adminId: req.user?.id, studentId: id },
+  );
+});

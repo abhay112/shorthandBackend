@@ -1,5 +1,6 @@
 import Student from '../models/Student.js';
 import Result from '../models/Result.js';
+import { auth } from '../config/firebase.js';
 // Test and TestSession imported but not used - kept for potential future use
 import StudentBatch from '../models/StudentBatch.js';
 import { AppError } from '../utils/AppError.js';
@@ -421,6 +422,37 @@ export const adminStudentService = {
 
   exportStudentActivityLog: async (studentId, options = {}) => {
     return studentService.exportActivityLog(studentId, options);
+  },
+
+  resetPassword: async (id, newPassword) => {
+    if (!newPassword || newPassword.length < 6) {
+      throw new AppError('Password must be at least 6 characters long', 400);
+    }
+    
+    // Explicitly fetch firebaseUid since it is excluded by default
+    const student = await Student.findById(id).select('+firebaseUid');
+    if (!student) {
+      throw new AppError('Student not found', 404);
+    }
+    
+    try {
+      await auth.updateUser(student.firebaseUid, {
+        password: newPassword
+      });
+      
+      logger.info('Student password reset in Firebase successfully', {
+        studentId: id,
+        firebaseUid: student.firebaseUid
+      });
+      
+      return { success: true };
+    } catch (error) {
+      logger.error('Firebase error resetting student password', {
+        studentId: id,
+        error: error.message
+      });
+      throw new AppError(`Firebase error: ${error.message}`, 400);
+    }
   }
 };
 
