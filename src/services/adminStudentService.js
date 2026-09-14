@@ -132,7 +132,7 @@ export const adminStudentService = {
     return await formatStudentSummary(student, true, true);
   },
 
-  approve: async (id, adminId = null) => {
+  approve: async (id, adminId = null, validityDays = null) => {
     const student = await Student.findById(id);
     if (!student) {
       throw new AppError('Student not found', 404);
@@ -144,8 +144,24 @@ export const adminStudentService = {
       student.approvedBy = adminId;
       student.approvedAt = new Date();
     }
+    if (validityDays) {
+      student.membershipExpiry = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000);
+    } else {
+      student.membershipExpiry = null;
+    }
     await student.save();
 
+    return await formatStudentSummary(student.toObject(), false, false);
+  },
+
+  revoke: async (id) => {
+    const student = await Student.findById(id);
+    if (!student) {
+      throw new AppError('Student not found', 404);
+    }
+    student.isApproved = false;
+    student.membershipExpiry = null;
+    await student.save();
     return await formatStudentSummary(student.toObject(), false, false);
   },
 
