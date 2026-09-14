@@ -49,12 +49,17 @@ export const getStudent = asyncHandler(async (req, res) => {
 
 export const approveStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { validityDays } = req.body || {};
+  const { validityDays, isApproved } = req.body || {};
   validateObjectId(id, 'student ID');
 
-  const student = await adminStudentService.approve(id, req.user?.id, validityDays);
+  let student;
+  if (isApproved === false) {
+    student = await adminStudentService.revoke(id, req.user?.id);
+  } else {
+    student = await adminStudentService.approve(id, req.user?.id, validityDays);
+  }
 
-  logger.info('Student approved by admin', {
+  logger.info(isApproved === false ? 'Student revoked by admin' : 'Student approved by admin', {
     adminId: req.user?.id,
     studentId: id,
   });
@@ -63,7 +68,7 @@ export const approveStudent = asyncHandler(async (req, res) => {
     res,
     200,
     true,
-    'Student approved successfully',
+    isApproved === false ? 'Student revoked successfully' : 'Student approved successfully',
     { student },
     { adminId: req.user?.id, studentId: id },
   );
