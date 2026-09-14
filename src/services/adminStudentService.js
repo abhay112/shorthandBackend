@@ -39,6 +39,7 @@ const formatStudentSummary = async (student, includeBatches = true, includeResul
     lastLogin: plain.lastLogin,
     createdAt: plain.createdAt,
     updatedAt: plain.updatedAt,
+    membershipExpiry: plain.membershipExpiry,
   };
 
   // Fetch batches using StudentBatch join table if requested
