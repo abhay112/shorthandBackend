@@ -56,6 +56,7 @@ export const authenticateFirebase = async (req, res, next) => {
     req.user.isApproved = user.isApproved || false;
     req.user.isBlocked = user.isBlocked || false;
     req.user.isActive = user.isActive !== undefined ? user.isActive : true;
+    req.user.membershipExpiry = user.membershipExpiry || null;
 
     // Update last login
     user.lastLogin = new Date();
@@ -117,6 +118,13 @@ export const requireApproval = (req, res, next) => {
     return res.status(403).json({ 
       success: false, 
       message: 'Account not approved yet' 
+    });
+  }
+
+  if (req.user.role === 'student' && req.user.membershipExpiry && new Date() > new Date(req.user.membershipExpiry)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Membership has expired' 
     });
   }
 

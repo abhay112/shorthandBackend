@@ -1006,9 +1006,10 @@ const studentService = {
         }
 
         const initTypingStarted = !hasAudio;
+        const actualDurationSeconds = test.duration < 60 ? test.duration * 60 : test.duration;
         const initialExpires = hasAudio
-          ? new Date(Date.now() + (test.duration + 3600) * 1000)
-          : new Date(Date.now() + test.duration * 1000);
+          ? new Date(Date.now() + (actualDurationSeconds + 3600) * 1000)
+          : new Date(Date.now() + actualDurationSeconds * 1000);
 
         // Use completedAttempts + 1 for attempt number (not totalUsed, which includes reserved attempts)
         session = await TestSession.create({
@@ -1173,7 +1174,8 @@ const studentService = {
       // Update timeStarted to typing start time
       session.timeStarted = typingStartedAt;
       // Reset timeExpires to normal duration
-      session.timeExpires = new Date(typingStartedAt.getTime() + test.duration * 1000);
+      const actualDurationSeconds = test.duration < 60 ? test.duration * 60 : test.duration;
+      session.timeExpires = new Date(typingStartedAt.getTime() + actualDurationSeconds * 1000);
 
       await session.save();
       return session;

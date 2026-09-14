@@ -12,6 +12,7 @@ const studentSchema = new mongoose.Schema({
   // Admin relationship fields (matching Prisma schema)
   approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
   approvedAt: { type: Date },
+  membershipExpiry: { type: Date },
   managedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
   
   lastLogin: { type: Date },

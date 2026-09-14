@@ -49,9 +49,10 @@ export const getStudent = asyncHandler(async (req, res) => {
 
 export const approveStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const { validityDays } = req.body || {};
   validateObjectId(id, 'student ID');
 
-  const student = await adminStudentService.approve(id, req.user?.id);
+  const student = await adminStudentService.approve(id, req.user?.id, validityDays);
 
   logger.info('Student approved by admin', {
     adminId: req.user?.id,
