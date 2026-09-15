@@ -1,4 +1,5 @@
 import express from 'express';
+import { authenticateFirebase, requireApproval } from '../middlewares/firebaseAuth.js';
 import authRoutes from './authRoutes.js';
 import adminRoutes from './adminRoutes.js';
 import adminStudentRoutes from './adminStudentRoutes.js';
@@ -24,11 +25,11 @@ router.use('/user', userRoutes);
 router.use('/user', userBatchRoutes);
 
 // Admin routes
+router.use('/admin/pdf', authenticateFirebase, requireApproval, pdfRouter);
 router.use('/admin', adminRoutes);
 router.use('/admin/students', adminStudentRoutes);
 router.use('/admin/tests', testRoutes);
 router.use('/admin/batches', batchRoutes);
-router.use('/admin/pdf', pdfRouter);
 router.use('/admin/audit', auditRoutes);
 router.use('/admin/shifts', shiftRoutes);
 
