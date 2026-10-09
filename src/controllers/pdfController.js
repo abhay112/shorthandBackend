@@ -18,31 +18,26 @@ const templatePath = path.join(__dirname, '..', 'views', 'template.html');
  * Get Chrome/Chromium executable path based on OS
  * Auto-detects Chrome installation or uses bundled Chromium
  */
+const isDocker = fs.existsSync('/.dockerenv') || process.env.DOCKER === 'true';
+
 function getChromeExecutablePath() {
-  // Allow override via environment variable
   if (process.env.CHROME_EXECUTABLE_PATH) {
     return process.env.CHROME_EXECUTABLE_PATH;
   }
 
-  // For production/Docker, try common paths (Alpine Linux first for Docker)
-  const commonPaths = [
-    '/usr/bin/chromium-browser', // Alpine Linux (Docker)
-    '/usr/bin/chromium', // Alpine Linux alternative
-    '/usr/bin/google-chrome-stable', // Debian/Ubuntu
-    '/usr/bin/chromium-browser', // Debian/Ubuntu alternative
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', // Windows 32-bit
-  ];
-
-  // Check if any common path exists
-  for (const chromePath of commonPaths) {
-    if (fs.existsSync(chromePath)) {
-      return chromePath;
+  if (isDocker) {
+    const dockerPaths = [
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/usr/bin/google-chrome-stable',
+    ];
+    for (const chromePath of dockerPaths) {
+      if (fs.existsSync(chromePath)) {
+        return chromePath;
+      }
     }
   }
 
-  // Return undefined to let Puppeteer use bundled Chromium
   return undefined;
 }
 
@@ -140,7 +135,7 @@ export const generatePdf = asyncHandler(async (req, res) => {
         '--disable-gpu',
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process',
-        '--single-process', // Required for running in Docker
+        ...(isDocker ? ['--single-process'] : []),
       ],
       timeout: 30000, // 30 seconds timeout for browser launch
     };
@@ -169,7 +164,7 @@ export const generatePdf = asyncHandler(async (req, res) => {
 
     // Set content with timeout and error handling
     await page.setContent(finalHtml, {
-      waitUntil: 'networkidle0',
+      waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
 
